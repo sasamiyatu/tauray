@@ -4,6 +4,7 @@
 #include "gbuffer.hh"
 #include "compute_pipeline.hh"
 #include "timer.hh"
+#include "scene.hh"
 
 namespace tr
 {
@@ -20,14 +21,15 @@ public:
         device_data& dev,
         gbuffer_target& input_features,
         gbuffer_target& prev_features,
-        render_target& tmp_color1,
-        render_target& tmp_color2,
         const options& opt
     );
     svgf_stage(const svgf_stage& other) = delete;
     svgf_stage(svgf_stage&& other) = delete;
 
-    bool need_ping_pongswap() const { return opt.repeat_count % 2 == 1; }
+    void set_scene(scene* cur_scene);
+    void update(uint32_t frame_index);
+
+    bool need_ping_pongswap() const { return false; }
 
     void init_resources();
     void record_command_buffers();
@@ -35,16 +37,21 @@ public:
 private:
     compute_pipeline atrous_comp;
     compute_pipeline temporal_comp;
+    compute_pipeline estimate_variance_comp;
     options opt; 
     gbuffer_target input_features;
     gbuffer_target prev_features;
-    render_target tmp_color[2];
+    render_target atrous_diffuse_pingpong[2];
     render_target atrous_specular_pingpong[2];
     render_target moments_history[2];
     render_target svgf_color_hist;
     render_target svgf_spec_hist;
-    std::unique_ptr<texture> render_target_texture[6];
+    std::unique_ptr<texture> render_target_texture[8];
     timer svgf_timer;
+
+    std::vector<vec4> jitter_history;
+    scene* cur_scene;
+    gpu_buffer jitter_buffer;
 };
 }
 

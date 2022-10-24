@@ -52,6 +52,7 @@ void post_processing_renderer::set_gbuffer_spec(gbuffer_spec& spec) const
         spec.pos_present = true;
         spec.albedo_present = true;
         spec.diffuse_present = true;
+        spec.linear_depth_present = true;
     }
 
     if(opt.bmfr.has_value())
@@ -227,10 +228,9 @@ void post_processing_renderer::init_pipelines()
             *dev,
             input_target,
             prev_gbuffer,
-            in_color,
-            out_color,
             opt.svgf_denoiser.value()
         ));
+        svgf->set_scene(cur_scene);
         if(svgf->need_ping_pongswap())
             swap_pingpong();
     }

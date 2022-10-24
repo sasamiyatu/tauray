@@ -3,18 +3,17 @@
 #include "svgf.glsl"
 #include "projection.glsl"
 #include "gbuffer.glsl"
+#include "color.glsl"
 
 layout (local_size_x = 16, local_size_y = 16) in;
 
-layout(binding = 0, set = 0, rgba16f) uniform readonly image2DArray in_color;
-layout(binding = 1, set = 0, rg16_snorm) uniform readonly image2DArray in_normal;
-layout(binding = 2, set = 0, rgba16f) uniform readonly image2DArray in_pos;
-layout(binding = 3, set = 0, rgba16f) uniform image2DArray inout_color[2];
-layout(binding = 4, set = 0, rgba16f) uniform readonly image2DArray in_albedo;
-layout(binding = 6, set = 0, rgba16f) uniform image2DArray inout_specular[2];
-layout(binding = 7, set = 0, rgba16f) uniform image2DArray moments_history[2];
-layout(binding = 8, set = 0, rgba16f) uniform image2DArray svgf_color_hist;
-layout(binding = 9, set = 0, rgba16f) uniform image2DArray svgf_hist_specular;
+layout(binding = 0, set = 0, rgba32f) uniform image2DArray color_ping;
+layout(binding = 1, set = 0, rgba32f) uniform image2DArray color_pong;
+layout(binding = 2, set = 0, rgba32f) uniform image2DArray color_hist;
+layout(binding = 3, set = 0, rgba32f) uniform image2DArray final_output;
+layout(binding = 4, set = 0, rgba32f) uniform image2DArray in_linear_depth;
+layout(binding = 5, set = 0, rgba32f) uniform image2DArray in_normal;
+layout(binding = 6, set = 0, rgba32f) uniform image2DArray in_albedo;
 
 layout(push_constant) uniform push_constant_buffer
 {
@@ -25,161 +24,109 @@ layout(push_constant) uniform push_constant_buffer
     int iteration_count;
 } control;
 
-vec4 sample_color(ivec3 p)
+float filter_variance(ivec3 p)
 {
-    if(control.parity == -1) return imageLoad(in_color, p);
-    else return imageLoad(inout_color[control.parity], p);
-}
+    float sum = 0.f;
 
-vec4 sample_specular(ivec3 p)
-{
-    return imageLoad(inout_specular[(control.parity+1)&1], p);
-}
+    const float kernel[2][2] = {
+        {1.0 / 4.0, 1.0 / 8.0},
+        {1.0 / 8.0, 1.0 / 16.0}
+    };
 
-void write_color(ivec3 p, vec4 color)
-{
-    imageStore(inout_color[(control.parity+1)&1], p, color);
-}
-
-void write_specular(ivec3 p, vec4 color)
-{
-    imageStore(inout_specular[control.parity&1], p, color);
-}
-
-float compute_sigma_luminance(ivec3 pos, float center)
-{
     const int r = 1;
-    float sum = center * gaussian_kernel[0][0];
-
     for (int yy = -r; yy <= r; ++yy)
     for (int xx = -r; xx <= r; ++xx)
     {
-        if (xx == 0 && yy == 0)
-            continue;
-
-        const ivec3 o = ivec3(
-            clamp(pos.xy + ivec2(xx, yy), ivec2(0), control.size-1),
-            pos.z
-        );
-        float variance = sample_color(pos).a;
-        float w = gaussian_kernel[abs(xx)][abs(yy)];
-        sum += variance * w;
+        const ivec3 q = p + ivec3(xx, yy, 0.0);
+        const float k = kernel[abs(xx)][abs(yy)];
+        //const float k = 1.0;
+        float v = (control.level & 1) == 0 ? imageLoad(color_ping, q).a : imageLoad(color_pong, q).a;
+        sum += v * k;
     }
-    return max(sum, 1e-8);
-}
 
-const float wavelet_factor = 0.5;
-const float wavelet_kernel[2][2] = {
-    { 1.0, wavelet_factor  },
-    { wavelet_factor, wavelet_factor * wavelet_factor }
-};
+    return sum;
+}
 
 void main()
 {
     const ivec3 p = ivec3(gl_GlobalInvocationID.xyz);
-
     if(all(lessThan(p.xy, control.size)))
     {
-        vec3 position_center = imageLoad(in_pos, p).xyz;        
-        if (any(isnan(position_center.xyz))) // This usually means it's an env map so early out
-            return;
+        vec4 center_color = (control.level & 1) == 0 ? imageLoad(color_ping, p) : imageLoad(color_pong, p);
+        float center_luminance = rgb_to_luminance(center_color.rgb);
+        // imageStore(final_output, p, vec4(center_color.rgb, 1.0));
+        // imageStore(color_hist, p, vec4(center_color));
+        // return;
+        const float eps_variance = 1e-10;
+        const float kernel_weights[3] = {1.0, 2.0/3.0, 1.0/6.0};
 
-        float sum_w_diff = 1.0;
-        float sum_w_spec = 1.0;
+        const float var = filter_variance(p);
 
-        vec4 color_center = sample_color(p);
-        vec3 normal_center = unpack_gbuffer_normal(imageLoad(in_normal, p).xy);
-        vec4 specular_center = sample_specular(p);
-        float color_luminance_center = luminance(color_center.rgb);
+        const vec2 z_center = imageLoad(in_linear_depth, p).xy;
 
-        float sigma_l = 1.0 / (2 * compute_sigma_luminance(p, color_luminance_center));
+        const int step_size = int(1u << control.level);
 
-        const int step_size = int(1u << control.stride);
-
-        vec3 sum_color = color_center.rgb;
-        vec3 sum_specular = specular_center.rgb;
-        float sum_variance = color_center.a;
-
-        const int r = 1;
-        int kernel_index = 0;
-
-        // if (!any(isnan(position_center)))
+        if (any(isnan(z_center)))
         {
-            for (int yy = -r; yy <= r; ++yy)
-            for (int xx = -r; xx <= r; ++xx)
+            if ((control.level & 1) == 0) imageStore(color_pong, p, center_color);
+            else                          imageStore(color_ping, p, center_color);
+            return;
+        }
+
+        const vec3 n_center = unpack_gbuffer_normal(imageLoad(in_normal, p).xy);
+
+        const float phi_color = 1.f *  sqrt(max(0.0, eps_variance + var));
+        const float phi_depth = max(z_center.y, 1e-8) * step_size;
+
+        vec4 sum_color = center_color;
+        float sum_w = 1.0;
+
+        const int r = 2;
+        for (int yy = -r; yy <= r; ++yy)
+        for (int xx = -r; xx <= r; ++xx)
+        {
+            const ivec3 q  = p + ivec3(xx, yy, 0) * step_size;
+            const float kernel = kernel_weights[abs(xx)] * kernel_weights[abs(yy)];
+            // float kernel = 1.0;
+
+            if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))) && xx != 0 && yy != 0)
             {
-                const ivec3 o = ivec3(
-                    clamp(p.xy + ivec2(xx, yy) * step_size, ivec2(0), control.size-1),
-                    p.z
-                );
+                const vec4 color_q = (control.level & 1) == 0 ? imageLoad(color_ping, q) : imageLoad(color_ping, q);
+                const float lum_q = rgb_to_luminance(color_q.rgb);
+                const float z_q = imageLoad(in_linear_depth, q).r;
+                const vec3 n_q = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
 
-                if (xx == 00 && yy == 00)
-                    continue;
+                const float w_n = pow(max(0.0, dot(n_q, n_center)), 32.0);
+                const float w_z = (phi_depth == 0) ? 0.0f : abs(z_q - z_center.x) / phi_depth;
+                const float w_l = abs(lum_q - center_luminance) / phi_color;
 
-                float w = float(all(greaterThanEqual(o.xy, ivec2(0)))
-                            && all(lessThan(o.xy, control.size)));
+                const float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n * kernel;
 
-                vec4 color_o = sample_color(o);
-                float lum_color_o = luminance(color_o.rgb);
-                float dist_l = abs(color_luminance_center - lum_color_o);
-
-                vec4 specular_o = sample_specular(o);
-
-                vec3 normal = unpack_gbuffer_normal(imageLoad(in_normal, o).xy);
-                vec3 position = imageLoad(in_pos, o).xyz;
-                vec3 diffp = position - position_center;
-                float distp = dot(diffp, diffp);
-
-                w *= pow(max(0.0, dot(normal_center, normal)), 128.0);  // normal based weight
-                w *= any(isnan(position)) ? 0.0 : exp(-distp);          // position based weight
-                /*
-                // Alternate, more scale-independent version:
-                vec3 tangent = normalize(position_center - position);
-                w *=
-                    clamp(1.0f-abs(dot(tangent, normal_center))*3.0f, 0.0, 1.0) *
-                    clamp(dot(normal, normal_center)*2.0f-1.0f, 0.0f, 1.0f);
-                */
-                w *= max(exp(-dist_l * dist_l * sigma_l), 0.0001f); // luminance based weight
-                // w *= kernel[kernel_index];
-                w *= wavelet_kernel[abs(xx)][abs(yy)];
-                ++kernel_index;
-
-                if (control.level < 2)
-                {
-                    sum_specular += specular_o.rgb * w;
-                    sum_w_spec += w;
-                }
-                sum_color += color_o.rgb * w;
-                sum_variance += color_o.a * w * w;
-                sum_w_diff += w;
+                sum_w += w;
+                sum_color += color_q * vec4(vec3(w), w * w);
             }
         }
+    
 
-        sum_color /= sum_w_diff;
-        sum_specular /= sum_w_spec;
-        sum_variance /= sum_w_diff * sum_w_diff;
-
-        sum_color = max(vec3(0.0), sum_color);
-        sum_specular = max(vec3(0.0), sum_specular);
-
-        write_specular(p, vec4(sum_specular.rgb, sum_variance));
-
+        vec4 filtered_color = sum_color / vec4(vec3(sum_w), sum_w * sum_w);
         if (control.level == 0)
         {
-            imageStore(svgf_color_hist, p, vec4(sum_color, sum_variance));
-            imageStore(svgf_hist_specular, p, vec4(sum_specular, sum_variance));
+            imageStore(color_hist, p, filtered_color);
         }
-        if (control.level == (control.iteration_count - 1))
-        {
-            vec3 out_color = sum_color  * imageLoad(in_albedo, p).rgb;
-            out_color += sum_specular.rgb;
-            write_color(p, vec4(vec3(out_color), 1.0));
 
-            imageStore(moments_history[0], p, imageLoad(moments_history[1], p));
+        if (control.level == control.iteration_count - 1)
+        {
+            // Remodulate and write output
+            vec4 albedo = imageLoad(in_albedo, p);
+            imageStore(final_output, p, vec4(filtered_color.rgb * albedo.rgb, 1.0));
+            //imageStore(final_output, p, vec4(filtered_color.aaa, 1.0));
+            //imageStore(final_output, p, vec4(center_color.rgb, 1.0));
+            return;
         }
         else
         {
-            write_color(p, vec4(sum_color.rgb, sum_variance));
+            if ((control.level & 1) == 0) imageStore(color_pong, p, filtered_color);
+            else                          imageStore(color_ping, p, filtered_color);
         }
     }
 }
