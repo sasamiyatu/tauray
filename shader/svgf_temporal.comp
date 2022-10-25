@@ -24,6 +24,8 @@ layout(binding = 9, set = 0, rgba32f) uniform image2DArray previous_linear_depth
 layout(binding = 10, set = 0, rgba32f) uniform image2DArray previous_moments;
 layout(binding = 11, set = 0, rgba32f) uniform image2DArray out_moments;
 layout(binding = 12, set = 0, rgba32f) uniform readonly image2DArray in_diffuse;
+layout(binding = 13, set = 0, rgba32f) uniform readonly image2DArray previous_specular;
+layout(binding = 14, set = 0, rgba32f) uniform image2DArray out_specular;
 
 layout(push_constant) uniform push_constant_buffer
 {
@@ -79,6 +81,8 @@ void main()
         vec2 depth = imageLoad(in_linear_depth, p).rg;
 
         vec4 prev_color = vec4(0.0);
+        vec4 prev_diffuse = vec4(0.0);
+        vec4 prev_specular = vec4(0.0);
         vec3 prev_moments = vec3(0.0);
         float history_length = 0.0;
 
@@ -117,6 +121,7 @@ void main()
                 if (v[i])
                 {
                     prev_color += w[i] * imageLoad(previous_color, q);
+                    prev_specular += w[i] * imageLoad(previous_specular, q);
                     prev_moments += w[i] * imageLoad(previous_moments, q).xyz;
                     sum_w += w[i];
                 }
@@ -124,6 +129,7 @@ void main()
 
             valid = (sum_w > 0.01);
             prev_color = valid ? prev_color / sum_w : vec4(0.0);
+            prev_specular = valid ? prev_specular / sum_w : vec4(0.0);
             prev_moments = valid ? prev_moments / sum_w : vec3(0.0);
         }
 
@@ -143,6 +149,7 @@ void main()
                 if (temporal_reprojection_is_valid(q, depth.x, prev_depth.x, depth.y, normal, prev_normal, full_motion.z))
                 {
                     prev_color += imageLoad(previous_color, q);
+                    prev_specular += imageLoad(previous_specular, q);
                     prev_moments += imageLoad(previous_moments, q).xyz;
                     n_valid += 1.0;
                 }
@@ -152,6 +159,7 @@ void main()
             {
                 valid = true;
                 prev_color /= n_valid;
+                prev_specular /= n_valid;
                 prev_moments /= n_valid;
             }
         }
@@ -164,6 +172,7 @@ void main()
         else
         {
             prev_color = vec4(0.0);
+            prev_specular = vec4(0.0);
             prev_moments = vec3(0.0);
             history_length = 0.0;
         }
@@ -171,12 +180,17 @@ void main()
 
 
         vec4 current_color = imageLoad(in_color, p);
+        if (any(isnan(current_color))) current_color = vec4(0.0);
+        vec4 current_diffuse = imageLoad(in_diffuse, p);
+        if (any(isnan(current_diffuse))) current_diffuse = vec4(0.0);
         vec4 current_albedo = imageLoad(in_albedo, p);
+        vec4 current_specular = current_color - current_diffuse * current_albedo;
+        if (any(isnan(current_specular)))  current_specular = vec4(0.0);
         vec3 c_curr = current_color.rgb / max(vec3(0.001), current_albedo.rgb);
         history_length = min(64.0, valid ? history_length + 1.0f : 1.0f);
         
         const float color_alpha = 0.02;
-        const float moments_alpha = 0.10;
+        const float moments_alpha = 0.20;
         float alpha = valid ? max(color_alpha, 1.0 / history_length) : 1.0;
         float alpha_moments = valid ? max(moments_alpha, 1.0 / history_length) : 1.0;
 
@@ -191,8 +205,11 @@ void main()
         float variance = max(0.f, moments.y - moments.x * moments.x);
 
         vec3 out_c = mix(prev_color.rgb, c_curr, alpha);
+        vec3 out_diff = mix(prev_color.rgb, current_diffuse.rgb, alpha);
+        vec3 out_spec = mix(prev_specular.rgb, current_specular.rgb, alpha);
 
-        imageStore(out_color, p, vec4(out_c, variance));
+        imageStore(out_color, p, vec4(out_diff, variance));
+        imageStore(out_specular, p, vec4(out_spec, variance));
         imageStore(out_moments, p, vec4(moments.xy, 1.0 / alpha, 0.0));
     }
 }

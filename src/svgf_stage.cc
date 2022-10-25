@@ -107,13 +107,14 @@ void svgf_stage::init_resources()
             {"specular_pong", {{}, atrous_specular_pingpong[0][i].view, vk::ImageLayout::eGeneral} },
             {"final_output", {{}, input_features.color[i].view, vk::ImageLayout::eGeneral}},
             {"color_hist", {{}, svgf_color_hist[i].view, vk::ImageLayout::eGeneral}},
+            {"spec_hist", {{}, svgf_spec_hist[i].view, vk::ImageLayout::eGeneral}},
             {"in_linear_depth", {{}, input_features.linear_depth[i].view, vk::ImageLayout::eGeneral}},
             {"in_normal", {{}, input_features.normal[i].view, vk::ImageLayout::eGeneral}},
             {"in_albedo", {{}, input_features.albedo[i].view, vk::ImageLayout::eGeneral}},
         }, i);
         temporal_comp.update_descriptor_set({
             {"in_color", {{}, input_features.color[i].view, vk::ImageLayout::eGeneral}},
-            {"in_diffuse", {{}, input_features.color[i].view, vk::ImageLayout::eGeneral}},
+            {"in_diffuse", {{}, input_features.diffuse[i].view, vk::ImageLayout::eGeneral}},
             {"previous_color", {{}, svgf_color_hist[i].view, vk::ImageLayout::eGeneral}},
             {"in_normal", {{}, input_features.normal[i].view, vk::ImageLayout::eGeneral}},
             {"in_screen_motion", {{}, input_features.screen_motion[i].view, vk::ImageLayout::eGeneral}},

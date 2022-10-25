@@ -14,6 +14,10 @@ layout(binding = 3, set = 0, rgba32f) uniform image2DArray final_output;
 layout(binding = 4, set = 0, rgba32f) uniform image2DArray in_linear_depth;
 layout(binding = 5, set = 0, rgba32f) uniform image2DArray in_normal;
 layout(binding = 6, set = 0, rgba32f) uniform image2DArray in_albedo;
+layout(binding = 7, set = 0, rgba32f) uniform image2DArray specular_ping;
+layout(binding = 8, set = 0, rgba32f) uniform image2DArray specular_pong;
+layout(binding = 9, set = 0, rgba32f) uniform image2DArray spec_hist;
+
 
 layout(push_constant) uniform push_constant_buffer
 {
@@ -53,9 +57,11 @@ void main()
     if(all(lessThan(p.xy, control.size)))
     {
         vec4 center_color = (control.level & 1) == 0 ? imageLoad(color_ping, p) : imageLoad(color_pong, p);
+        vec4 center_specular = (control.level & 1) == 0 ? imageLoad(specular_ping, p) : imageLoad(specular_pong, p);
         float center_luminance = rgb_to_luminance(center_color.rgb);
-        // imageStore(final_output, p, vec4(center_color.rgb, 1.0));
+        // imageStore(final_output, p, vec4(center_specular.rgb, 1.0));
         // imageStore(color_hist, p, vec4(center_color));
+        // imageStore(spec_hist, p, vec4(center_specular));
         // return;
         const float eps_variance = 1e-10;
         const float kernel_weights[3] = {1.0, 2.0/3.0, 1.0/6.0};
@@ -79,7 +85,9 @@ void main()
         const float phi_depth = max(z_center.y, 1e-8) * step_size;
 
         vec4 sum_color = center_color;
+        vec4 sum_specular = center_specular;
         float sum_w = 1.0;
+        float sum_w_spec = 1.0;
 
         const int r = 2;
         for (int yy = -r; yy <= r; ++yy)
@@ -92,6 +100,7 @@ void main()
             if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))) && xx != 0 && yy != 0)
             {
                 const vec4 color_q = (control.level & 1) == 0 ? imageLoad(color_ping, q) : imageLoad(color_ping, q);
+                const vec4 spec_q =  (control.level & 1) == 0 ? imageLoad(specular_ping, q) : imageLoad(specular_pong, q);
                 const float lum_q = rgb_to_luminance(color_q.rgb);
                 const float z_q = imageLoad(in_linear_depth, q).r;
                 const vec3 n_q = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
@@ -100,33 +109,42 @@ void main()
                 const float w_z = (phi_depth == 0) ? 0.0f : abs(z_q - z_center.x) / phi_depth;
                 const float w_l = abs(lum_q - center_luminance) / phi_color;
 
-                const float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n * kernel;
+                const float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n;
 
                 sum_w += w;
                 sum_color += color_q * vec4(vec3(w), w * w);
+                if (control.level < 0)
+                {
+                    sum_w_spec += w;
+                    sum_specular += spec_q * vec4(vec3(w), w * w);
+                }
+                    
             }
         }
     
 
         vec4 filtered_color = sum_color / vec4(vec3(sum_w), sum_w * sum_w);
+        vec4 filtered_spec = sum_specular / vec4(vec3(sum_w_spec), sum_w_spec * sum_w_spec);
         if (control.level == 0)
         {
             imageStore(color_hist, p, filtered_color);
+            imageStore(spec_hist, p, filtered_spec);
+
         }
 
         if (control.level == control.iteration_count - 1)
         {
             // Remodulate and write output
             vec4 albedo = imageLoad(in_albedo, p);
-            imageStore(final_output, p, vec4(filtered_color.rgb * albedo.rgb, 1.0));
+            imageStore(final_output, p, vec4(filtered_spec.rgb + filtered_color.rgb * albedo.rgb, 1.0));
             //imageStore(final_output, p, vec4(filtered_color.aaa, 1.0));
             //imageStore(final_output, p, vec4(center_color.rgb, 1.0));
             return;
         }
         else
         {
-            if ((control.level & 1) == 0) imageStore(color_pong, p, filtered_color);
-            else                          imageStore(color_ping, p, filtered_color);
+            if ((control.level & 1) == 0) {imageStore(color_pong, p, filtered_color); imageStore(specular_pong, p, filtered_spec);}
+            else                          {imageStore(color_ping, p, filtered_color); imageStore(specular_ping, p, filtered_spec);}
         }
     }
 }
