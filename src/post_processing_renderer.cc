@@ -53,6 +53,7 @@ void post_processing_renderer::set_gbuffer_spec(gbuffer_spec& spec) const
         spec.albedo_present = true;
         spec.diffuse_present = true;
         spec.linear_depth_present = true;
+        spec.material_present = true;
     }
 
     if(opt.bmfr.has_value())

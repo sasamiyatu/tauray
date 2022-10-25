@@ -111,6 +111,7 @@ void svgf_stage::init_resources()
             {"in_linear_depth", {{}, input_features.linear_depth[i].view, vk::ImageLayout::eGeneral}},
             {"in_normal", {{}, input_features.normal[i].view, vk::ImageLayout::eGeneral}},
             {"in_albedo", {{}, input_features.albedo[i].view, vk::ImageLayout::eGeneral}},
+            {"in_material", {{}, input_features.material[i].view, vk::ImageLayout::eGeneral}},
         }, i);
         temporal_comp.update_descriptor_set({
             {"in_color", {{}, input_features.color[i].view, vk::ImageLayout::eGeneral}},

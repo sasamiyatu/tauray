@@ -17,6 +17,7 @@ layout(binding = 6, set = 0, rgba32f) uniform image2DArray in_albedo;
 layout(binding = 7, set = 0, rgba32f) uniform image2DArray specular_ping;
 layout(binding = 8, set = 0, rgba32f) uniform image2DArray specular_pong;
 layout(binding = 9, set = 0, rgba32f) uniform image2DArray spec_hist;
+layout(binding = 10, set = 0, rgba32f) uniform image2DArray in_material;
 
 
 layout(push_constant) uniform push_constant_buffer
@@ -84,6 +85,9 @@ void main()
         const float phi_color = 1.f *  sqrt(max(0.0, eps_variance + var));
         const float phi_depth = max(z_center.y, 1e-8) * step_size;
 
+        const float roughness_center = imageLoad(in_material, p).y;
+        const float spec_filter_width_scale = clamp(roughness_center * 30.0 - control.level, 0.0, 1.0);
+
         vec4 sum_color = center_color;
         vec4 sum_specular = center_specular;
         float sum_w = 1.0;
@@ -99,24 +103,32 @@ void main()
 
             if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))) && xx != 0 && yy != 0)
             {
-                const vec4 color_q = (control.level & 1) == 0 ? imageLoad(color_ping, q) : imageLoad(color_ping, q);
+                const vec4 color_q = (control.level & 1) == 0 ? imageLoad(color_ping, q) : imageLoad(color_pong, q);
                 const vec4 spec_q =  (control.level & 1) == 0 ? imageLoad(specular_ping, q) : imageLoad(specular_pong, q);
                 const float lum_q = rgb_to_luminance(color_q.rgb);
                 const float z_q = imageLoad(in_linear_depth, q).r;
                 const vec3 n_q = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
+                const float roughness_q = imageLoad(in_material, q).y;
 
                 const float w_n = pow(max(0.0, dot(n_q, n_center)), 32.0);
-                const float w_z = (phi_depth == 0) ? 0.0f : abs(z_q - z_center.x) / phi_depth;
+                const float w_z = (phi_depth == 0) ? 0.0f : abs(z_q - z_center.x) / (phi_depth * length(vec2(xx, yy)));
                 const float w_l = abs(lum_q - center_luminance) / phi_color;
 
-                const float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n;
+                float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n;
+                w *= kernel;
+                
+                const float w_n_spec = pow(max(0.0, dot(n_q, n_center)), 1024.0);
+                float w_spec = exp(-max(w_z, 0.0)) * w_n_spec;
+
+                w_spec *= max(0.0, 1.0 - 10.0 * abs(roughness_q - roughness_center)) * spec_filter_width_scale;
+                w_spec *= kernel;
 
                 sum_w += w;
                 sum_color += color_q * vec4(vec3(w), w * w);
-                if (control.level < 0)
+                if (control.level < 2)
                 {
-                    sum_w_spec += w;
-                    sum_specular += spec_q * vec4(vec3(w), w * w);
+                    sum_w_spec += w_spec;
+                    sum_specular += spec_q * vec4(vec3(w_spec), w_spec * w_spec);
                 }
                     
             }
@@ -137,6 +149,7 @@ void main()
             // Remodulate and write output
             vec4 albedo = imageLoad(in_albedo, p);
             imageStore(final_output, p, vec4(filtered_spec.rgb + filtered_color.rgb * albedo.rgb, 1.0));
+            //imageStore(final_output, p, vec4(vec3(roughness_center), 1.0));
             //imageStore(final_output, p, vec4(filtered_color.aaa, 1.0));
             //imageStore(final_output, p, vec4(center_color.rgb, 1.0));
             return;

@@ -72,7 +72,7 @@ void main()
                     vec3 q_n = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
 
                     float w_n = pow(max(0.0, dot(q_n, normal_center)), 32.f);
-                    float w_z = (phi_depth == 0) ? 0.0f : abs(q_z - z_center.x) / phi_depth;
+                    float w_z = (phi_depth == 0) ? 0.0f : abs(q_z - z_center.x) / (phi_depth * length(vec2(xx, yy)));
                     float w_l = abs(q_lum - lum_center) / phi_lum;
                     float w = exp(-max(0.0, w_l) - max(0.0, w_z)) * w_n;
 
