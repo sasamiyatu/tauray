@@ -26,6 +26,7 @@ layout(binding = 11, set = 0, rgba32f) uniform image2DArray out_moments;
 layout(binding = 12, set = 0, rgba32f) uniform readonly image2DArray in_diffuse;
 layout(binding = 13, set = 0, rgba32f) uniform readonly image2DArray previous_specular;
 layout(binding = 14, set = 0, rgba32f) uniform image2DArray out_specular;
+layout(binding = 15, set = 0, rgba32f) uniform image2DArray in_material;
 
 layout(push_constant) uniform push_constant_buffer
 {
@@ -41,21 +42,30 @@ layout(binding = 7) buffer jitter_info_buffer
     vec4 jitter[];
 } jitter_info;
 
-bool temporal_reprojection_is_valid(ivec3 p, float z, float prev_z, float z_deriv, vec3 normal, vec3 prev_normal, float motion_z)
+bool temporal_reprojection_is_valid(ivec3 p, float z, float prev_z, float z_deriv, vec3 normal, vec3 prev_normal, float motion_z, float fnormal)
 {
     if (any(greaterThanEqual(p.xy, control.size)) || any(lessThan(p.xy, ivec2(0))))
         return false;
 
-    // if (abs(z - prev_z) / (z_deriv + 1e-2f) > 10.f)
-    //     return false;
     if (isnan(z) || isnan(prev_z))
         return false;
-    
+
+    if (abs(z - prev_z) / (z_deriv + 1e-2f) > 10.f)
+        return false;
+
+    if (distance(normal, prev_normal) / (fnormal + 1e-2) > 16.0)
+        return false;
+
+    //if (p.xy == ivec2(640, 360))
+    //   debugPrintfEXT("fnorm: %f, z_diff: %f, z_deriv: %f", fnormal, abs(z - prev_z), z_deriv);
+    /*if (isnan(z) || isnan(prev_z))
+        return false;
+
     if (abs(prev_z - motion_z) / z > 0.05)
         return false;
 
     if (dot(normal, prev_normal) < 0.5)
-        return false;
+        return false;*/
 
     return true;
 }
@@ -75,11 +85,14 @@ void main()
         motion -= (cur_jitter - prev_jitter)*0.5f;
         //debugPrintfEXT("cur jitter: %f %f, prev jitter: %f %f", cur_jitter.x, cur_jitter.y, prev_jitter.x, prev_jitter.y);
         motion.y = 1.f - motion.y;
-        motion = motion * vec2(control.size) - vec2(0.5);
+        motion = motion * vec2(control.size)- vec2(0.5);
 
         vec3 normal = unpack_gbuffer_normal(imageLoad(in_normal, p).rg);
-        vec2 depth = imageLoad(in_linear_depth, p).rg;
-
+        vec4 depth = imageLoad(in_linear_depth, p);
+        const float deriv = max(abs(depth.y), abs(depth.z));
+        vec2 mat = imageLoad(in_material, p).rg;
+        float shininess = clamp(2.0 / (mat.g * mat.g * mat.g * mat.g) - 2.0, 0.0, 32.0);
+;
         vec4 prev_color = vec4(0.0);
         vec4 prev_diffuse = vec4(0.0);
         vec4 prev_specular = vec4(0.0);
@@ -96,8 +109,8 @@ void main()
             q.xy += offsets[i];
 
             vec3 prev_normal = unpack_gbuffer_normal(imageLoad(previous_normal, q).rg);
-            vec2 prev_depth = imageLoad(previous_linear_depth, q).rg;
-            v[i] = temporal_reprojection_is_valid(q, depth.x, prev_depth.x, depth.y, normal, prev_normal, full_motion.z);
+            vec4 prev_depth = imageLoad(previous_linear_depth, q);
+            v[i] = temporal_reprojection_is_valid(q, depth.x, prev_depth.x, deriv, normal, prev_normal, full_motion.z, depth.w);
             valid = valid || v[i];
         }
 
@@ -106,6 +119,7 @@ void main()
             // We found some valid samples
             // Do bilinear filtering
             float sum_w = 0.f;
+            float sum_w_spec = 0.f;
             float x = fract(motion.x);
             float y = fract(motion.y);
             const float w[4] = {(1.0 - x) * (1.0 - y),
@@ -120,16 +134,21 @@ void main()
 
                 if (v[i])
                 {
-                    prev_color += w[i] * imageLoad(previous_color, q);
-                    prev_specular += w[i] * imageLoad(previous_specular, q);
-                    prev_moments += w[i] * imageLoad(previous_moments, q).xyz;
-                    sum_w += w[i];
+                    vec3 prev_normal = unpack_gbuffer_normal(imageLoad(previous_normal, q).rg);
+                    float w_diff = w[i] * max(dot(prev_normal, normal), 0.0);
+                    float w_spec = w[i] * pow(max(dot(prev_normal, normal), 0.0), shininess);
+
+                    prev_color += w_diff * imageLoad(previous_color, q);
+                    prev_specular += w_spec * imageLoad(previous_specular, q);
+                    prev_moments += w_diff * imageLoad(previous_moments, q).xyz;
+                    sum_w += w_diff;
+                    sum_w_spec += w_spec;
                 }
             }
 
             valid = (sum_w > 0.01);
             prev_color = valid ? prev_color / sum_w : vec4(0.0);
-            prev_specular = valid ? prev_specular / sum_w : vec4(0.0);
+            prev_specular = valid ? prev_specular / sum_w_spec : vec4(0.0);
             prev_moments = valid ? prev_moments / sum_w : vec3(0.0);
         }
 
@@ -146,7 +165,7 @@ void main()
                 vec3 prev_normal = unpack_gbuffer_normal(imageLoad(previous_normal, q).rg);
                 vec2 prev_depth = imageLoad(previous_linear_depth, q).rg;
 
-                if (temporal_reprojection_is_valid(q, depth.x, prev_depth.x, depth.y, normal, prev_normal, full_motion.z))
+                if (temporal_reprojection_is_valid(q, depth.x, prev_depth.x, deriv, normal, prev_normal, full_motion.z, depth.w))
                 {
                     prev_color += imageLoad(previous_color, q);
                     prev_specular += imageLoad(previous_specular, q);
@@ -187,9 +206,9 @@ void main()
         vec4 current_specular = current_color - current_diffuse * current_albedo;
         if (any(isnan(current_specular)))  current_specular = vec4(0.0);
         vec3 c_curr = current_color.rgb / max(vec3(0.001), current_albedo.rgb);
-        history_length = min(64.0, valid ? history_length + 1.0f : 1.0f);
-        
-        const float color_alpha = 0.02;
+        history_length = min(256.0, valid ? history_length + 1.0f : 1.0f);
+
+        const float color_alpha = 0.01;
         const float moments_alpha = 0.20;
         float alpha = valid ? max(color_alpha, 1.0 / history_length) : 1.0;
         float alpha_moments = valid ? max(moments_alpha, 1.0 / history_length) : 1.0;
@@ -207,7 +226,10 @@ void main()
         vec3 out_c = mix(prev_color.rgb, c_curr, alpha);
         vec3 out_diff = mix(prev_color.rgb, current_diffuse.rgb, alpha);
         vec3 out_spec = mix(prev_specular.rgb, current_specular.rgb, alpha);
+        if (any(isnan(out_spec))) out_spec = vec3(0.0);
 
+        if (any(isnan(out_c)))  debugPrintfEXT("nan");
+        //imageStore(out_color, p, vec4(out_c, variance));
         imageStore(out_color, p, vec4(out_diff, variance));
         imageStore(out_specular, p, vec4(out_spec, variance));
         imageStore(out_moments, p, vec4(moments.xy, 1.0 / alpha, 0.0));

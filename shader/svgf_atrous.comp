@@ -1,5 +1,6 @@
 #version 460
 #extension GL_GOOGLE_include_directive : enable
+#extension GL_EXT_debug_printf : enable
 #include "svgf.glsl"
 #include "projection.glsl"
 #include "gbuffer.glsl"
@@ -18,7 +19,6 @@ layout(binding = 7, set = 0, rgba32f) uniform image2DArray specular_ping;
 layout(binding = 8, set = 0, rgba32f) uniform image2DArray specular_pong;
 layout(binding = 9, set = 0, rgba32f) uniform image2DArray spec_hist;
 layout(binding = 10, set = 0, rgba32f) uniform image2DArray in_material;
-
 
 layout(push_constant) uniform push_constant_buffer
 {
@@ -66,10 +66,14 @@ void main()
         // return;
         const float eps_variance = 1e-10;
         const float kernel_weights[3] = {1.0, 2.0/3.0, 1.0/6.0};
+        //const float kernel_weights[3] = {1.0/6.0, 2.0/3.0, 1.0};
 
         const float var = filter_variance(p);
 
-        const vec2 z_center = imageLoad(in_linear_depth, p).xy;
+        //if (p.xy == ivec2(640, 360))
+        //    debugPrintfEXT("var: %f", var);
+
+        const vec4 z_center = imageLoad(in_linear_depth, p);
 
         const int step_size = int(1u << control.level);
 
@@ -82,8 +86,9 @@ void main()
 
         const vec3 n_center = unpack_gbuffer_normal(imageLoad(in_normal, p).xy);
 
-        const float phi_color = 1.f *  sqrt(max(0.0, eps_variance + var));
-        const float phi_depth = max(z_center.y, 1e-8) * step_size;
+        const float phi_color = 4.f *  sqrt(max(0.0, var)) + 1e-2;
+        const float phi_depth = max(z_center.y, 1e-8) / length(vec2(step_size));
+        const vec2 depth_grad = z_center.yz;
 
         const float roughness_center = imageLoad(in_material, p).y;
         const float spec_filter_width_scale = clamp(roughness_center * 30.0 - control.level, 0.0, 1.0);
@@ -99,7 +104,7 @@ void main()
         {
             const ivec3 q  = p + ivec3(xx, yy, 0) * step_size;
             const float kernel = kernel_weights[abs(xx)] * kernel_weights[abs(yy)];
-            // float kernel = 1.0;
+            //float kernel = 1.0;
 
             if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))) && xx != 0 && yy != 0)
             {
@@ -110,14 +115,30 @@ void main()
                 const vec3 n_q = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
                 const float roughness_q = imageLoad(in_material, q).y;
 
-                const float w_n = pow(max(0.0, dot(n_q, n_center)), 32.0);
-                const float w_z = (phi_depth == 0) ? 0.0f : abs(z_q - z_center.x) / (phi_depth * length(vec2(xx, yy)));
+                float w = 1.0;
+                const float w_n = pow(max(0.0, dot(n_q, n_center)), 128.0);
+                w *= w_n;
+                //float w_z = (phi_depth == 0) ? 0.0f : abs(z_q - z_center.x) * (phi_depth) * 2.0;
+                const float sigma_z = 1.0;
+                float w_z = abs(z_q - z_center.x) / (sigma_z * abs(dot(depth_grad, p.xy - q.xy)) + 1e-6);
+                if (isnan(w_z)) w_z = 0.0;
+                w *= exp(-w_z);
+                //w = exp(-w_z);
+                //const float w_z = (abs(z_q - z_center.x) / (phi_depth));
                 const float w_l = abs(lum_q - center_luminance) / phi_color;
+                w *= exp(-w_l);
+                if (p.xy == ivec2(640, 360))
+                    debugPrintfEXT("w_l: %f, w: %f", w_l, w);
+                //const float w_l = 0.0;
+                //const float w_z = 0.0;
 
-                float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n;
-                w *= kernel;
-                
-                const float w_n_spec = pow(max(0.0, dot(n_q, n_center)), 1024.0);
+                //float w = exp(-max(w_l, 0.0) - max(w_z, 0.0)) * w_n;
+                //w = w_n;
+                //w *= kernel;
+                //w *= exp(-w_l);
+                //w = exp(-w_z);
+
+                const float w_n_spec = pow(max(0.0, dot(n_q, n_center)), 256.0);
                 float w_spec = exp(-max(w_z, 0.0)) * w_n_spec;
 
                 w_spec *= max(0.0, 1.0 - 10.0 * abs(roughness_q - roughness_center)) * spec_filter_width_scale;
@@ -125,15 +146,15 @@ void main()
 
                 sum_w += w;
                 sum_color += color_q * vec4(vec3(w), w * w);
-                if (control.level < 2)
+                if (control.level < 5)
                 {
                     sum_w_spec += w_spec;
                     sum_specular += spec_q * vec4(vec3(w_spec), w_spec * w_spec);
                 }
-                    
+
             }
         }
-    
+
 
         vec4 filtered_color = sum_color / vec4(vec3(sum_w), sum_w * sum_w);
         vec4 filtered_spec = sum_specular / vec4(vec3(sum_w_spec), sum_w_spec * sum_w_spec);
@@ -149,6 +170,9 @@ void main()
             // Remodulate and write output
             vec4 albedo = imageLoad(in_albedo, p);
             imageStore(final_output, p, vec4(filtered_spec.rgb + filtered_color.rgb * albedo.rgb, 1.0));
+            //imageStore(final_output, p, vec4(filtered_color.rgb * albedo.rgb, 1.0));
+            //imageStore(final_output, p, vec4(filtered_color.rgb, 1.0));
+            //imageStore(final_output, p, vec4(filtered_color.rgb, 1.0));
             //imageStore(final_output, p, vec4(vec3(roughness_center), 1.0));
             //imageStore(final_output, p, vec4(filtered_color.aaa, 1.0));
             //imageStore(final_output, p, vec4(center_color.rgb, 1.0));

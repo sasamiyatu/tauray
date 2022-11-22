@@ -46,7 +46,8 @@ void main()
             vec3 sum_specular = vec3(0.0);
             float lum_center = rgb_to_luminance(c_center.rgb);
 
-            vec2 z_center = imageLoad(in_linear_depth, p).xy;
+            vec4 z_center = imageLoad(in_linear_depth, p);
+            const vec2 depth_grad = z_center.yz;
             if (any(isnan(z_center)))
             {
                 imageStore(out_color, p, c_center);
@@ -55,14 +56,15 @@ void main()
 
             vec3 normal_center = unpack_gbuffer_normal(imageLoad(in_normal, p).rg);
             const float phi_lum = 10.f;
-            const float phi_depth = max(z_center.y, 1e-8) * 3.0;
+            const float deriv = max(abs(z_center.y), abs(z_center.z));
+            const float phi_depth = max(deriv, 1e-8) * 3.0;
 
             const int r = 3;
             for (int yy = -r; yy <= r; ++yy)
             for (int xx = -r; xx <= r; ++xx)
             {
                 ivec3 q = ivec3(p.xy + ivec2(xx, yy), p.z);
-                if (all(lessThan(p.xy, control.size)) && all(greaterThanEqual(p.xy, ivec2(0))))
+                if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))))
                 {
                     vec3 q_color = imageLoad(in_color, q).rgb;
                     vec3 q_specular = imageLoad(in_specular, q).rgb;
@@ -70,9 +72,11 @@ void main()
                     float q_lum = rgb_to_luminance(q_color);
                     float q_z = imageLoad(in_linear_depth, q).r;
                     vec3 q_n = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
-
+                    const float sigma_z = 1.0;
                     float w_n = pow(max(0.0, dot(q_n, normal_center)), 32.f);
-                    float w_z = (phi_depth == 0) ? 0.0f : abs(q_z - z_center.x) / (phi_depth * length(vec2(xx, yy)));
+                    float w_z = abs(q_z - z_center.x) / (sigma_z * abs(dot(depth_grad, p.xy - q.xy)) + 1e-6);
+
+                    //float w_z = (phi_depth == 0) ? 0.0f : abs(q_z - z_center.x) / (phi_depth * length(vec2(xx, yy)));
                     float w_l = abs(q_lum - lum_center) / phi_lum;
                     float w = exp(-max(0.0, w_l) - max(0.0, w_z)) * w_n;
 

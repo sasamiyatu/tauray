@@ -376,20 +376,22 @@ void write_gbuffer_linear_depth(ivec3 pos)
     imageStore(linear_depth_target, pos, vec4(1.0, 0.0, 1.0, 1.0));
 }
 
-vec2 read_gbuffer_ linear_depth(ivec3 pos)
+vec2 read_gbuffer_linear_depth(ivec3 pos)
 {
     return imageLoad(linear_depth_target, pos).rg;
 }
 
 #elif defined(LINEAR_DEPTH_TARGET_LOCATION)
 
-layout(location = LINEAR_DEPTH_TARGET_LOCATION) out vec2 linear_depth_target;
+layout(location = LINEAR_DEPTH_TARGET_LOCATION) out vec4 linear_depth_target;
 
-void write_gbuffer_linear_depth()
+void write_gbuffer_linear_depth(vec3 pos, vec3 normal)
 {
     const float linear_depth = gl_FragCoord.z / gl_FragCoord.w;
-    const float deriv = max(abs(dFdx(linear_depth)), abs(dFdy(linear_depth)));
-    linear_depth_target = vec2(linear_depth, deriv);
+    //const float deriv = max(abs(dFdx(linear_depth)), abs(dFdy(linear_depth)));
+    const vec2 grad = vec2(dFdx(linear_depth), dFdy(linear_depth));
+    //const float deriv = length(vec2(dFdx(linear_depth), dFdy(linear_depth)));
+    linear_depth_target = vec4(linear_depth, grad, length(fwidth(normal)));
 }
 
 #else

@@ -129,6 +129,7 @@ void svgf_stage::init_resources()
             {"previous_linear_depth", {{}, prev_features.linear_depth[i].view, vk::ImageLayout::eGeneral}},
             {"jitter_info", {*jitter_buffer, 0, VK_WHOLE_SIZE}},
             {"previous_specular", {{}, svgf_spec_hist[i].view, vk::ImageLayout::eGeneral}},
+            {"in_material", {{}, input_features.material[i].view, vk::ImageLayout::eGeneral}},
         }, i);
         estimate_variance_comp.update_descriptor_set({
             {"in_color", {{}, atrous_diffuse_pingpong[0][i].view, vk::ImageLayout::eGeneral}},
@@ -154,7 +155,7 @@ void svgf_stage::record_command_buffers()
         svgf_timer.begin(cb, i);
 
         jitter_buffer.upload(i, cb);
-        
+
         uvec2 wg = (input_features.get_size()+15u)/16u;
         push_constant_buffer_temporal control_temporal;
         control_temporal.size = input_features.get_size();
@@ -202,18 +203,18 @@ void svgf_stage::record_command_buffers()
             cb.dispatch(wg.x, wg.y, input_features.get_layer_count());
         }
 
-        //cb.pipelineBarrier(
-        //    vk::PipelineStageFlagBits::eComputeShader,
-        //    vk::PipelineStageFlagBits::eComputeShader,
-        //    {}, barrier, {}, {}
-        //);
+        cb.pipelineBarrier(
+            vk::PipelineStageFlagBits::eComputeShader,
+            vk::PipelineStageFlagBits::eComputeShader,
+            {}, barrier, {}, {}
+        );
 
 #if 0
         push_constant_buffer_atrous control_atrous;
         control_atrous.size = input_features.get_size();
         control_atrous.iteration_count = opt.repeat_count;
 
-        for (int j = 0; j < opt.repeat_count; ++j)
+        for (int j = 0; j < 1; ++j)
         {
             if (j != 0)
             {

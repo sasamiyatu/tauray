@@ -208,9 +208,9 @@ void main()
     write_gbuffer_diffuse(vec4(direct_diffuse + indirect_diffuse, mat.albedo.a));
     write_gbuffer_albedo(vec4(mat.albedo));
     write_gbuffer_material(pack_gbuffer_material(mat));
-    write_gbuffer_normal(v.mapped_normal);
+    write_gbuffer_normal(v.smooth_normal);
     write_gbuffer_pos(v.pos);
     write_gbuffer_screen_motion(get_camera_projection(camera.pairs[gl_ViewIndex].previous, v.prev_pos));
     write_gbuffer_instance_id(int(control.instance_id));
-    write_gbuffer_linear_depth();
+    write_gbuffer_linear_depth(v.pos, v.mapped_normal);
 }
