@@ -75,6 +75,7 @@ void main()
 
         const vec4 z_center = imageLoad(in_linear_depth, p);
 
+
         const int step_size = int(1u << control.level);
 
         if (any(isnan(z_center)))
@@ -127,8 +128,9 @@ void main()
                 //const float w_z = (abs(z_q - z_center.x) / (phi_depth));
                 const float w_l = abs(lum_q - center_luminance) / phi_color;
                 w *= exp(-w_l);
-                if (p.xy == ivec2(640, 360))
-                    debugPrintfEXT("w_l: %f, w: %f", w_l, w);
+                //w = exp(-w_z);
+                //if (p.xy == ivec2(640, 360))
+                //    debugPrintfEXT("w_l: %f, w: %f", w_l, w);
                 //const float w_l = 0.0;
                 //const float w_z = 0.0;
 
@@ -157,6 +159,8 @@ void main()
 
 
         vec4 filtered_color = sum_color / vec4(vec3(sum_w), sum_w * sum_w);
+        //vec4 filtered_color = center_color;
+        //vec4 filtered_spec = center_specular;
         vec4 filtered_spec = sum_specular / vec4(vec3(sum_w_spec), sum_w_spec * sum_w_spec);
         if (control.level == 0)
         {
@@ -170,6 +174,7 @@ void main()
             // Remodulate and write output
             vec4 albedo = imageLoad(in_albedo, p);
             imageStore(final_output, p, vec4(filtered_spec.rgb + filtered_color.rgb * albedo.rgb, 1.0));
+
             //imageStore(final_output, p, vec4(filtered_color.rgb * albedo.rgb, 1.0));
             //imageStore(final_output, p, vec4(filtered_color.rgb, 1.0));
             //imageStore(final_output, p, vec4(filtered_color.rgb, 1.0));

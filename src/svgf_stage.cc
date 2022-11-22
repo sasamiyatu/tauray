@@ -42,13 +42,15 @@ svgf_stage::svgf_stage(
     svgf_timer(dev, "svgf (" + std::to_string(input_features.get_layer_count()) + " viewports)"),
     jitter_buffer(dev, sizeof(pvec4)* 1, vk::BufferUsageFlagBits::eStorageBuffer)
 {
-    init_resources();
-    record_command_buffers();
+    //init_resources();
+    //record_command_buffers();
 }
 
 void svgf_stage::set_scene(scene* cur_scene)
 {
     this->cur_scene = cur_scene;
+    init_resources();
+    record_command_buffers();
 }
 
 void svgf_stage::update(uint32_t frame_index)
@@ -100,6 +102,8 @@ void svgf_stage::init_resources()
 
     for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
+        cur_scene->bind(temporal_comp, i);
+
         atrous_comp.update_descriptor_set({
             {"color_ping", {{}, atrous_diffuse_pingpong[1][i].view, vk::ImageLayout::eGeneral} },
             {"color_pong", {{}, atrous_diffuse_pingpong[0][i].view, vk::ImageLayout::eGeneral} },
@@ -130,6 +134,7 @@ void svgf_stage::init_resources()
             {"jitter_info", {*jitter_buffer, 0, VK_WHOLE_SIZE}},
             {"previous_specular", {{}, svgf_spec_hist[i].view, vk::ImageLayout::eGeneral}},
             {"in_material", {{}, input_features.material[i].view, vk::ImageLayout::eGeneral}},
+            {"prev_material", {{}, prev_features.material[i].view, vk::ImageLayout::eGeneral}},
         }, i);
         estimate_variance_comp.update_descriptor_set({
             {"in_color", {{}, atrous_diffuse_pingpong[0][i].view, vk::ImageLayout::eGeneral}},
