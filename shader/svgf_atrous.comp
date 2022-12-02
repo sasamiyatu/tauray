@@ -38,6 +38,48 @@ float filter_variance(ivec3 p)
     return sum;
 }
 
+// Remap partial depth derivatives at z0 from [1,1] pixel offset to a new pixel offset.
+vec2 RemapDdxy(float z0, in vec2 ddxy, in vec2 pixelOffset)
+{
+    // Perspective correction for non-linear depth interpolation.
+    // Ref: https://www.scratchapixel.com/lessons/3d-basic-rendering/rasterization-practical-implementation/visibility-problem-depth-buffer-depth-interpolation
+    // Given a linear depth interpolation for finding z at offset q along z0 to z1
+    //      z =  1 / (1 / z0 * (1 - q) + 1 / z1 * q)
+    // and z1 = z0 + ddxy, where z1 is at a unit pixel offset [1, 1]
+    // z can be calculated via ddxy as
+    //
+    //      z = (z0 + ddxy) / (1 + (1-q) / z0 * ddxy)
+    vec2 z = (z0 + ddxy) / (1 + ((1 - pixelOffset) / z0) * ddxy);
+    return sign(pixelOffset) * (z - z0);
+}
+
+vec2 get_depth_grad(ivec3 p, float center_z)
+{
+    ivec3 top = clamp(p + ivec3(0, 1, 0), ivec3(0), ivec3(control.size - 1, p.z));
+    ivec3 bottom = clamp(p + ivec3(0, -1, 0), ivec3(0), ivec3(control.size - 1, p.z));
+    ivec3 left = clamp(p + ivec3(-1, 0, 0), ivec3(0), ivec3(control.size - 1, p.z));
+    ivec3 right = clamp(p + ivec3(1, 0, 0), ivec3(0), ivec3(control.size - 1, p.z));
+
+    vec2 backward_diff = center_z - vec2(imageLoad(in_linear_depth, left).x, imageLoad(in_linear_depth, top).x);
+    vec2 forward_diff = vec2(imageLoad(in_linear_depth, right).x, imageLoad(in_linear_depth, bottom).x) - center_z;
+
+    vec2 ddx = vec2(backward_diff.x, forward_diff.x);
+    vec2 ddy = vec2(backward_diff.y, forward_diff.y);
+
+    vec2 delta_x = abs(ddx);
+    int min_x_index = delta_x[0] < delta_x[1] ? 0 : 1;
+    vec2 delta_y = abs(ddy);
+    int min_y_index = delta_y[0] < delta_y[1] ? 0 : 1;
+
+    vec2 ddxy = vec2(ddx[min_x_index], ddy[min_y_index]);
+
+    float maxdxdy = 1.0;
+    vec2 sign_ = sign(ddxy);
+    ddxy = sign_ * min(abs(ddxy), maxdxdy);
+
+    return ddxy;
+}
+
 void main()
 {
     const ivec3 p = ivec3(gl_GlobalInvocationID.xyz);
@@ -73,20 +115,25 @@ void main()
 
         const float phi_color = control.sigma_l *  sqrt(max(0.0, var)) + 1e-2;
         const vec2 depth_grad = z_center.yz;
+        //const vec2 depth_grad = get_depth_grad(p, z_center.x);
 
         vec4 sum_color = center_color;
         vec4 sum_specular = center_specular;
         float sum_w = 1.0;
         float sum_w_spec = 1.0;
+        const float kernelWeights[3] = { 1.0, 2.0 / 3.0, 1.0 / 6.0 };
 
         const int r = control.atrous_kernel_radius;
+        int count = 0;
         for (int yy = -r; yy <= r; ++yy)
         for (int xx = -r; xx <= r; ++xx)
         {
             const ivec3 q  = p + ivec3(xx, yy, 0) * step_size;
-
-            if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))) && xx != 0 && yy != 0)
+            const float kernel = kernelWeights[abs(xx)] * kernelWeights[abs(yy)];
+            bool is_center = (xx == 0) && (yy == 0);
+            if (all(lessThan(q.xy, control.size)) && all(greaterThanEqual(q.xy, ivec2(0))) && !is_center)
             {
+                count++;
                 const vec4 color_q = (control.level & 1) == 0 ? imageLoad(diffuse_ping, q) : imageLoad(diffuse_pong, q);
                 const vec4 spec_q =  (control.level & 1) == 0 ? imageLoad(specular_ping, q) : imageLoad(specular_pong, q);
                 const float lum_q = rgb_to_luminance(color_q.rgb);
@@ -94,10 +141,40 @@ void main()
                 const vec3 n_q = unpack_gbuffer_normal(imageLoad(in_normal, q).rg);
                 const float roughness_q = imageLoad(in_material, q).y;
 
+                #if 0
                 float w_n = pow(max(0.0, dot(n_q, n_center)), control.sigma_n);
                 float w_z = abs(z_q - z_center.x) / (control.sigma_z * abs(dot(depth_grad, p.xy - q.xy)) + 1e-6);
                 float w_l = abs(lum_q - center_luminance) / phi_color;
                 float w = w_n * exp(-max(0.0, w_z) - max(0.0, w_l));
+                //w *= kernel;
+                #else
+
+                const float error_offset = 0.005f;
+                float value_sigma_dist_coef = 1.0f / length(vec2(p.xy - q.xy));
+                const float value_sigma = 1.0f;
+                float e_x = -abs(lum_q - center_luminance) / (value_sigma_dist_coef * phi_color + error_offset);
+                float w_x = exp(e_x);
+                float w_n = pow(max(0.0, dot(n_q, n_center)), control.sigma_n);
+                float w_z;
+                {
+                    const float depth_weight_cutoff = 0.2f;
+                    vec2 pixel_offset = vec2(q.xy - p.xy);
+                    float depth_float_precision = FloatPrecision(max(z_q, z_center.x), 23);
+                    vec2 newddxy = RemapDdxy(z_center.x, depth_grad, pixel_offset);
+                    float depth_threshold = dot(vec2(1.0), abs(pixel_offset * depth_grad));
+                    //depth_threshold = dot(vec2(1.0))
+                    float depth_tolerance = control.sigma_z * depth_threshold + depth_float_precision;
+                    float delta = abs(z_q - z_center.x);
+                    delta = max(0.0, delta - depth_float_precision);
+                    float div = -delta / depth_tolerance;
+                    w_z = exp(-delta / depth_tolerance);
+                    w_z = w_z > depth_weight_cutoff ? w_z : 0.0;
+                    if (p.xy == ivec2(640, 360))
+                    debugPrintfEXT("w_z: %f, delta: %f, tol: %f, div: %f, offset: %f %f", w_z, delta, depth_tolerance, div, pixel_offset.x, pixel_offset.y);
+                }
+                float w = w_n * w_z;// * kernel;
+                #endif
+                vec2 pixel_offset = vec2(q.xy - p.xy);
 
                 float r_max = 0.1;
                 float r_near = 0.01;
@@ -118,6 +195,8 @@ void main()
             }
         }
 
+        if (p.xy == ivec2(640, 360))
+            debugPrintfEXT("radius: %d, count: %d", r, count);
         vec4 filtered_color = sum_color / vec4(vec3(sum_w), sum_w * sum_w);
         vec4 filtered_spec = sum_specular / vec4(vec3(sum_w_spec), sum_w_spec * sum_w_spec);
         if (control.level == 0)

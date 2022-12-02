@@ -38,7 +38,7 @@ bool temporal_reprojection_is_valid(ivec3 p, float z, float prev_z, vec3 normal,
     if (isnan(z) || isnan(prev_z))
         return false;
 
-    if (abs(prev_z - motion_z) / z > 0.05)
+    if (abs(prev_z - motion_z) / z > 0.01)
         return false;
 
     if (dot(normal, prev_normal) < 0.5)
@@ -65,7 +65,8 @@ void main()
 
         vec3 normal = unpack_gbuffer_normal(imageLoad(in_normal, p).rg);
         vec4 depth = imageLoad(in_linear_depth, p);
-;
+        vec2 depth_grad = depth.yz;
+
         vec4 prev_color = vec4(0.0);
         vec4 prev_diffuse = vec4(0.0);
         vec4 prev_specular = vec4(0.0);
@@ -89,9 +90,29 @@ void main()
             q.xy += offsets[i];
             vec3 prev_normal = unpack_gbuffer_normal(imageLoad(previous_normal, q).rg);
             vec4 prev_depth = imageLoad(previous_linear_depth, q);
-            if (temporal_reprojection_is_valid(q, depth.x, prev_depth.x, normal, prev_normal, full_motion.z))
+            //if (temporal_reprojection_is_valid(q, depth.x, prev_depth.x, normal, prev_normal, full_motion.z))
             {
-                float w = weights[i] * max(0.0, dot(prev_normal, normal));
+                float curr_z_in_prev_frame = full_motion.z;
+                bool within_bounds = !(any(greaterThanEqual(p.xy, control.size)) || any(lessThan(p.xy, ivec2(0))));
+                float depth_thres = dot(vec2(1.0), abs(depth_grad));
+                float depth_float_precision = FloatPrecision(curr_z_in_prev_frame, 23);
+                float depth_sigma = 1.0;
+                float depth_tolerance = depth_sigma * depth_thres + depth_float_precision;
+                float w_z = min(depth_tolerance / (abs(prev_depth.x - curr_z_in_prev_frame) + depth_float_precision), 1.0);
+                const float weight_cutoff = 0.5;
+                w_z = w_z > weight_cutoff ? w_z : 0.0;
+
+                const float sigma_n = 1.1;
+                const float sigma_exponent = 32.0;
+                float ndotn = dot(prev_normal, normal) * sigma_n;
+                float w_n = pow(clamp(ndotn, 0.0, 1.0), sigma_exponent);
+
+                if (p.xy == ivec2(640, 360))
+                    debugPrintfEXT("depth: %f, diff: %f, ddx: %f, ddxy: %f prec: %f, depth_thres: %f, w_z: %f",
+                    depth.x, abs(prev_depth.x - depth.x), depth_grad.x, depth_grad.y, depth_float_precision, depth_thres, w_z);
+
+                //float w = weights[i] * max(0.0, dot(prev_normal, normal));
+                float w = weights[i] * w_n * w_z * float(within_bounds);
                 float w_spec = w;
 
                 prev_color += w * imageLoad(previous_color, q);
@@ -101,6 +122,9 @@ void main()
                 sum_w_spec += w_spec;
             }
         }
+
+        if (p.xy == ivec2(640, 360))
+            debugPrintfEXT("sum_w: %f", sum_w);
 
         bool valid = sum_w > 1e-3;
         prev_color = valid ? prev_color / sum_w : vec4(0.0);

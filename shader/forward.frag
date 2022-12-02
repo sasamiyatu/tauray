@@ -187,6 +187,7 @@ void main()
     vertex_data v = get_vertex_data();
     sampled_material mat = sample_material(v);
     vec3 view = normalize(v.pos - camera.pairs[gl_ViewIndex].current.origin.xyz);
+    vec3 view_unnormalized = v.pos - camera.pairs[gl_ViewIndex].current.origin.xyz;
     mat3 tbn = create_tangent_space(v.mapped_normal);
     vec3 shading_view = -view * tbn;
     vec3 direct_diffuse;
@@ -203,6 +204,7 @@ void main()
     indirect_diffuse *= mat.albedo.rgb;
 #endif
 
+    float linear_z = dot(view_unnormalized, -vec3(camera.pairs[gl_ViewIndex].current.view_inverse[2]));
     write_gbuffer_color(vec4(direct_diffuse + direct_specular + indirect_diffuse + indirect_specular, mat.albedo.a));
     write_gbuffer_direct(vec4(direct_diffuse + direct_specular, mat.albedo.a));
     write_gbuffer_diffuse(vec4(direct_diffuse + indirect_diffuse, mat.albedo.a));
@@ -212,5 +214,5 @@ void main()
     write_gbuffer_pos(v.pos);
     write_gbuffer_screen_motion(get_camera_projection(camera.pairs[gl_ViewIndex].previous, v.prev_pos));
     write_gbuffer_instance_id(int(control.instance_id));
-    write_gbuffer_linear_depth();
+    write_gbuffer_linear_depth(linear_z);
 }

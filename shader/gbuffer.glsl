@@ -384,9 +384,10 @@ vec3 read_gbuffer_linear_depth(ivec3 pos)
 
 layout(location = LINEAR_DEPTH_TARGET_LOCATION) out vec4 linear_depth_target;
 
-void write_gbuffer_linear_depth()
+void write_gbuffer_linear_depth(float lin_z)
 {
     const float linear_depth = gl_FragCoord.z / gl_FragCoord.w;
+    //const float linear_depth = lin_z;
     const vec2 grad = vec2(dFdx(linear_depth), dFdy(linear_depth));
     linear_depth_target = vec4(linear_depth, grad, 0.0);
 }
