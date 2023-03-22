@@ -53,6 +53,24 @@ vec3 ggx_fresnel(float cos_d, sampled_material mat)
     );
 }
 
+// Used in importance sampling which sometimes can't depend on actual fresnel
+// values. This one works with the cos_d being dot(view, surface normal)
+// (not microfacet normal).
+float fresnel_importance(float cos_d, sampled_material mat)
+{
+    if(mat.ior_in > mat.ior_out)
+    {
+        float inv_eta = mat.ior_in / mat.ior_out;
+        float sin_theta2 = inv_eta * inv_eta * (1.0f - cos_d * cos_d);
+        if(sin_theta2 >= 1.0f)
+            return 1.0f;
+        cos_d = sqrt(1.0f - sin_theta2);
+    }
+    else if(mat.ior_in == mat.ior_out)
+        return 0.0f;
+    return mat.f0 + (max(1.0f - mat.roughness, mat.f0) - mat.f0) * pow(1.0f - cos_d, 5.0f);
+}
+
 // Only valid when refraction isn't possible. Faster than the generic
 // ggx_fresnel. Specular-only, has no diffuse component!
 vec3 ggx_fresnel_refl(float cos_d, sampled_material mat)
@@ -237,11 +255,7 @@ vec3 ggx_vndf_sample(
     float u1,
     float u2
 ){
-    vec3 v = normalize(vec3(
-        roughness * view.x,
-        roughness * view.y,
-        view.z
-    ));
+    vec3 v = normalize(vec3(roughness * view.x, roughness * view.y, view.z));
 
     vec3 t1 = v.z < 0.9999 ? normalize(cross(v, vec3(0, 0, 1))) : vec3(1, 0, 0);
     vec3 t2 = cross(t1, v);
@@ -281,9 +295,9 @@ void ggx_bsdf_sample(
     // This is arbitrary, but affects the PDF. Thus, handling it is part of the
     // normalization. I selected this one to have the number of rays somewhat
     // match the intensity of the reflection.
-    float specular_cutoff = mix(
-        1, max(fresnel.r, max(fresnel.g, fresnel.b)), (1-mat.metallic) * max_albedo
-    );
+    float specular_cutoff = mix(1, fresnel_importance(view_dir.z, mat), (1-mat.metallic) * max_albedo);
+    // Lower noise, but seems to bias slightly :(
+    //float specular_cutoff = mix(1, max(fresnel.r, max(fresnel.g, fresnel.b)), (1-mat.metallic) * max_albedo);
 
     // If the specular test fails, next up is the decision between diffuse /
     // transmissive. Again, arbitrary number that must be accounted for in the
@@ -351,6 +365,13 @@ void ggx_bsdf_sample(
         else
         { // Transmissive
             out_dir = normalize(refract(-view_dir, h, mat.ior_in/mat.ior_out));
+            if(any(isnan(out_dir)))
+            {
+                out_dir = vec3(0);
+                diffuse_weight = vec3(0);
+                pdf = 0;
+                return;
+            }
             float cos_l = out_dir.z;
             float cos_h = h.z;
             float cos_o = dot(out_dir, h);
@@ -401,9 +422,9 @@ float ggx_bsdf_pdf(
 
     float max_albedo = max(mat.albedo.r, max(mat.albedo.g, mat.albedo.b));
 
-    float specular_cutoff = mix(
-        1, max(fresnel.r, max(fresnel.g, fresnel.b)), (1-mat.metallic) * max_albedo
-    );
+    float specular_cutoff = mix(1, fresnel_importance(view_dir.z, mat), (1-mat.metallic) * max_albedo);
+    // Lower noise, but seems to bias slightly :(
+    //float specular_cutoff = mix(1, max(fresnel.r, max(fresnel.g, fresnel.b)), (1-mat.metallic) * max_albedo);
     float diffuse_cutoff = 1.0f - mat.transmittance;
 
     float specular_probability = specular_cutoff;
@@ -460,6 +481,60 @@ void lambert_bsdf_sample(
     float brdf = out_dir.z / M_PI;
     diffuse_weight = vec3(brdf / pdf);
     specular_weight = vec3(0.0f);
+}
+
+void material_bsdf_sample(
+    vec4 uniform_random,
+    vec3 view_dir,
+    sampled_material mat,
+    out vec3 out_dir,
+    out vec3 diffuse_weight,
+    out vec3 specular_weight,
+    out float pdf
+){
+#if defined(BOUNCE_HEMISPHERE)
+    if(mat.transmittance > 0.0f)
+    {
+        out_dir = sample_sphere(uniform_random.xy);
+        pdf = 0.25f/M_PI;
+    }
+    else
+    {
+        out_dir = sample_hemisphere(uniform_random.xy);
+        pdf = 0.5f/M_PI;
+    }
+    ggx_bsdf_pdf(out_dir, view_dir, mat, diffuse_weight, specular_weight);
+#elif defined(BOUNCE_COSINE_HEMISPHERE)
+    float split = mat.transmittance * 0.5f;
+    out_dir = (uniform_random.z < split ? -1 : 1) * sample_cosine_hemisphere(uniform_random.xy);
+    pdf = abs(out_dir.z / M_PI) * (uniform_random.z < split ? split : 1.0f-split);
+
+    ggx_bsdf_pdf(out_dir, view_dir, mat, diffuse_weight, specular_weight);
+#else
+    ggx_bsdf_sample(uniform_random, view_dir, mat, out_dir, diffuse_weight, specular_weight, pdf);
+#endif
+}
+
+float material_bsdf_pdf(
+    vec3 out_dir,
+    vec3 view_dir,
+    sampled_material mat,
+    out vec3 diffuse_weight,
+    out vec3 specular_weight
+){
+#if defined(BOUNCE_HEMISPHERE)
+    ggx_bsdf_pdf(out_dir, view_dir, mat, diffuse_weight, specular_weight);
+    if(mat.transmittance == 0 && out_dir.z <= 0) return 0.0f;
+    return mat.transmittance > 0.0f ? 0.25f/M_PI : 0.5f/M_PI;
+#elif defined(BOUNCE_COSINE_HEMISPHERE)
+    ggx_bsdf_pdf(out_dir, view_dir, mat, diffuse_weight, specular_weight);
+
+    if(mat.transmittance == 0 && out_dir.z <= 0) return 0.0f;
+    float split = mat.transmittance * 0.5f;
+    return abs(out_dir.z / M_PI) * (out_dir.z < 0 ? split : 1.0f-split);
+#else
+    return ggx_bsdf_pdf(out_dir, view_dir, mat, diffuse_weight, specular_weight);
+#endif
 }
 
 #endif

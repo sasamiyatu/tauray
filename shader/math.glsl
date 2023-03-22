@@ -25,6 +25,18 @@ mat3 create_tangent_space(vec3 normal)
     return mat3(tangent, bitangent, normal);
 }
 
+vec3 orthogonalize(vec3 a, vec3 b)
+{
+    return normalize(b - dot(a, b) * a);
+}
+
+mat3 orthogonalize(mat3 m)
+{
+    m[0] = normalize(m[0] - dot(m[0], m[2]) * m[2]);
+    m[1] = cross(m[2], m[0]);
+    return m;
+}
+
 uint find_bit_by_cardinality(uint r, uint v)
 {
     uint c = 0;
@@ -257,12 +269,24 @@ vec3 sample_cosine_hemisphere(vec2 u)
 
 float pdf_cosine_hemisphere(vec3 dir)
 {
-    return dir.z * (1.0/M_PI);
+    return max(dir.z, 0.0) * (1.0/M_PI);
 }
 
 vec3 sample_sphere(vec2 u)
 {
     float cos_theta = 2 * u.x - 1;
+    float sin_theta = sqrt(1.0f - cos_theta * cos_theta);
+    float phi = u.y * 2 * M_PI;
+    return vec3(
+        cos(phi) * sin_theta,
+        sin(phi) * sin_theta,
+        cos_theta
+    );
+}
+
+vec3 sample_hemisphere(vec2 u)
+{
+    float cos_theta = u.x;
     float sin_theta = sqrt(1.0f - cos_theta * cos_theta);
     float phi = u.y * 2 * M_PI;
     return vec3(
@@ -301,6 +325,118 @@ vec3 sample_cone(vec2 u, vec3 dir, float cos_theta_min)
     // it's just caused by numeric inaccuracies, the bias caused by this should
     // be insignificant ;)
     return dot(o, dir) <= cos_theta_min ? dir : o;
+}
+
+vec3 sample_triangle_area(vec2 u, vec3 A, vec3 B, vec3 C)
+{
+    float alpha = u.x;
+    float beta = u.y;
+    if(alpha+beta > 1)
+    {
+        alpha = 1 - alpha;
+        beta = 1 - beta;
+    }
+    float gamma = 1-beta-alpha;
+    return alpha * A + beta * B + gamma * C;
+}
+
+float determinant_accurate(vec3 nA, vec3 nB, vec3 nC)
+{
+    float div = inversesqrt(2.0f * abs(nB.x) + 2.0f);
+    float e = nB.x > 0 ? div : -div;
+    vec3 h = nB * div + vec3(e, 0, 0);
+
+    vec3 a = nA - 2.0f * h * dot(h, nA);
+    vec3 c = nC - 2.0f * h * dot(h, nC);
+    return abs(a.y * c.z - c.y * a.z);
+}
+
+// https://momentsingraphics.de/Siggraph2021.html
+vec3 sample_spherical_triangle(
+    vec2 xi, vec3 A, vec3 B, vec3 C, out float pdf
+){
+    vec3 nA = normalize(A);
+    vec3 nB = normalize(B);
+    vec3 nC = normalize(C);
+
+    float dAB = dot(nA, nB);
+    float dBC = dot(nB, nC);
+    float dAC = dot(nA, nC);
+
+    float div = inversesqrt(2.0f * abs(nB.x) + 2.0f);
+    float e = nB.x > 0 ? div : -div;
+    vec3 h = nB * div + vec3(e, 0, 0);
+
+    vec3 a = nA - 2.0f * h * (dAB * div + e * nA.x);
+    vec3 c = nC - 2.0f * h * (dBC * div + e * nC.x);
+    float G0 = abs(a.y * c.z - c.y * a.z);
+    float G1 = dAC + dBC;
+    float G2 = 1.0f + dAB;
+
+    float solid_angle = 2.0f * atan(G0, G1 + G2);
+    pdf = 1.0f / solid_angle;
+    float chosen_split = xi.x * solid_angle * 0.5;
+    vec3 r = (G0 * cos(chosen_split) - G1 * sin(chosen_split)) * nA + G2 * sin(chosen_split) * nC;
+
+    vec3 Ch = 2.0f * dot(nA, r) * r / dot(r, r) - nA;
+    float d = dot(Ch, nB);
+    float z = 1 - xi.y + d * xi.y;
+    float st = sqrt((1.0f - z * z)/(1.0f - d * d));
+    return (z - st * d) * nB + st * Ch;
+}
+
+// Caution: all input vectors must be normalized!
+float spherical_triangle_solid_angle(
+    vec3 nA, vec3 nB, vec3 nC
+){
+    return 2.0f * atan(
+        determinant_accurate(nA, nB, nC),
+        1.0f + (dot(nA,nB)+(dot(nB,nC)+dot(nA,nC)))
+    );
+}
+
+float triangle_surface_area(vec3 a, vec3 b, vec3 c)
+{
+    return 0.5f * length(cross(a-b, a-c));
+}
+
+float area_light_pdf(float area, vec3 normal, vec3 view, float dist2)
+{
+    return dist2/(abs(dot(normal, view)) * area);
+}
+
+float triangle_area_pdf(vec3 p, vec3 a, vec3 b, vec3 c)
+{
+    vec3 normal = cross(a-b, a-c);
+    float normal_len = length(normal);
+    float p_dist2 = dot(p, p);
+    return 2.0 * p_dist2*sqrt(p_dist2)/abs(dot(normal, p));
+}
+
+// Assumes that ray starts from vec3(0)
+float ray_plane_intersection_dist(
+    vec3 dir, vec3 A, vec3 B, vec3 C
+){
+    vec4 plane = vec4(normalize(cross(A-B, A-C)), 0);
+    plane.w = dot(A, plane.xyz);
+    return abs(plane.w / dot(plane.xyz, dir));
+}
+
+vec3 get_barycentric_coords(vec3 p, vec3 A, vec3 B, vec3 C)
+{
+    vec3 ba = B - A, ca = C - A, pa = p - A;
+    float bb = dot(ba, ba);
+    float bc = dot(ba, ca);
+    float cc = dot(ca, ca);
+    float pb = dot(pa, ba);
+    float pc = dot(pa, ca);
+    float denom = 1.0f / (bb * cc - bc * bc);
+
+    vec3 bary;
+    bary.y = (cc * pb - bc * pc) * denom;
+    bary.z = (bb * pc - bc * pb) * denom;
+    bary.x = 1.0f - bary.y - bary.z;
+    return bary;
 }
 
 #endif

@@ -17,6 +17,7 @@ namespace path_tracer
         shader_source shadow_chit("shader/path_tracer_shadow.rchit");
         std::map<std::string, std::string> defines;
         defines["MAX_BOUNCES"] = std::to_string(opt.max_ray_depth);
+        defines["SAMPLES_PER_PASS"] = std::to_string(opt.samples_per_pass);
 
         if(opt.russian_roulette_delta > 0)
             defines["USE_RUSSIAN_ROULETTE"];
@@ -33,9 +34,6 @@ namespace path_tracer
         if(opt.transparent_background)
             defines["USE_TRANSPARENT_BACKGROUND"];
 
-        if(opt.importance_sample_envmap)
-            defines["IMPORTANCE_SAMPLE_ENVMAP"];
-
         if(opt.regularization_gamma != 0.0f)
             defines["PATH_SPACE_REGULARIZATION"];
 
@@ -47,18 +45,12 @@ namespace path_tracer
         TR_GBUFFER_ENTRIES
 #undef TR_GBUFFER_ENTRY
 
-        switch(opt.film)
-        {
-        case film::POINT:
-            defines["USE_POINT_FILTER"];
-            break;
-        case film::BOX:
-            defines["USE_BOX_FILTER"];
-            break;
-        case film::BLACKMAN_HARRIS:
-            defines["USE_BLACKMAN_HARRIS_FILTER"];
-            break;
-        }
+        add_defines(opt.sampling_weights, defines);
+        add_defines(opt.film, defines);
+        add_defines(opt.mis_mode, defines);
+        add_defines(opt.bounce_mode, defines);
+        add_defines(opt.tri_light_mode, defines);
+
         rt_camera_stage::get_common_defines(defines, opt);
 
         return {
@@ -132,7 +124,7 @@ path_tracer_stage::path_tracer_stage(
         ),
         opt,
         "path tracing",
-        opt.samples_per_pixel
+        opt.samples_per_pixel / opt.samples_per_pass
     ),
     opt(opt)
 {
@@ -164,12 +156,9 @@ void path_tracer_stage::record_command_buffer_push_constants(
     control.indirect_clamping = opt.indirect_clamping;
     control.regularization_gamma = opt.regularization_gamma;
 
-    control.previous_samples = pass_index;
-    control.samples = min(
-        opt.samples_per_pixel - (int)control.previous_samples,
-        1
-    );
-    control.antialiasing = opt.film != film::POINT ? 1 : 0;
+    control.previous_samples = pass_index * opt.samples_per_pass;
+    control.samples = opt.samples_per_pass;
+    control.antialiasing = opt.film != film_filter::POINT ? 1 : 0;
 
     gfx.push_constants(cb, control);
 }

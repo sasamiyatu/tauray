@@ -1,5 +1,6 @@
 #ifndef COLOR_GLSL
 #define COLOR_GLSL
+
 // As described in
 // https://en.wikipedia.org/wiki/SRGB#Specification_of_the_transformation,
 // but branchless and SIMD-optimized.

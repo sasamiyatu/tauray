@@ -3,7 +3,7 @@ cmake_minimum_required(VERSION 3.16)
 project(Tauray LANGUAGES C CXX)
 
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
-option(VULKAN_VALIDATION "Load Vulkan validation layers when present" ON)
+option(VULKAN_VALIDATION "Load Vulkan validation layers by default when present" OFF)
 
 find_package(Threads)
 
@@ -50,6 +50,11 @@ function(add_openxr)
 endfunction()
 add_openxr()
 
+
+set(TAURAY_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+string(LENGTH "${TAURAY_PROJECT_ROOT}/" TAURAY_PROJECT_ROOT_PATH_SIZE)
+add_compile_definitions("TAURAY_PROJECT_ROOT_PATH_SIZE=${TAURAY_PROJECT_ROOT_PATH_SIZE}")
+
 add_subdirectory(external/fuchsia_radix_sort)
 
 find_package(SDL2 REQUIRED)
@@ -67,6 +72,7 @@ add_library(tauray-core STATIC
   external/tinyply.cc
   external/vk_mem_alloc.cc
   src/aabb_scene.cc
+  src/acceleration_structure.cc
   src/animation.cc
   src/atlas.cc
   src/basic_pipeline.cc
@@ -76,6 +82,7 @@ add_library(tauray-core STATIC
   src/context.cc
   src/dependency.cc
   src/descriptor_state.cc
+  src/direct_stage.cc
   src/distribution_strategy.cc
   src/dshgi_renderer.cc
   src/dshgi_server.cc
@@ -96,6 +103,7 @@ add_library(tauray-core STATIC
   src/light.cc
   src/light_scene.cc
   src/load_balancer.cc
+  src/log.cc
   src/looking_glass.cc
   src/looking_glass_composition_stage.cc
   src/material.cc
@@ -119,6 +127,7 @@ add_library(tauray-core STATIC
   src/rectangle_packer.cc
   src/render_target.cc
   src/rt_camera_stage.cc
+  src/rt_common.cc
   src/rt_stage.cc
   src/rt_renderer.cc
   src/sampler.cc

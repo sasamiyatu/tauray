@@ -30,24 +30,12 @@ namespace sh_path_tracer
         if(opt.russian_roulette_delta > 0)
             defines["USE_RUSSIAN_ROULETTE"];
 
-        if(opt.importance_sample_envmap)
-            defines["IMPORTANCE_SAMPLE_ENVMAP"];
+        add_defines(opt.sampling_weights, defines);
+        add_defines(opt.film, defines);
+        add_defines(opt.mis_mode, defines);
 
         if(opt.regularization_gamma != 0.0f)
             defines["PATH_SPACE_REGULARIZATION"];
-
-        switch(opt.film)
-        {
-        case film::POINT:
-            defines["USE_POINT_FILTER"];
-            break;
-        case film::BOX:
-            defines["USE_BOX_FILTER"];
-            break;
-        case film::BLACKMAN_HARRIS:
-            defines["USE_BLACKMAN_HARRIS_FILTER"];
-            break;
-        }
 
         defines["SH_ORDER"] = std::to_string(opt.sh_order);
         defines["SH_COEF_COUNT"] = std::to_string(

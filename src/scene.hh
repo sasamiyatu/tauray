@@ -4,6 +4,8 @@
 #include "mesh_scene.hh"
 #include "timer.hh"
 #include "sampler_table.hh"
+#include "descriptor_state.hh"
+#include "acceleration_structure.hh"
 
 namespace tr
 {
@@ -52,14 +54,14 @@ public:
         bool loop = false,
         bool use_fallback = false
     );
-    void update(time_ticks dt);
+    void update(time_ticks dt, bool force_update = false);
     bool is_playing() const;
     void set_animation_time(time_ticks dt);
     time_ticks get_total_ticks() const;
 
     vk::AccelerationStructureKHR get_acceleration_structure(
         size_t device_index
-    );
+    ) const;
 
     void set_shadow_map_renderer(shadow_map_renderer* smr);
     void set_sh_grid_textures(
@@ -67,7 +69,9 @@ public:
     );
     vec2 get_shadow_map_atlas_pixel_margin() const;
 
+    std::vector<descriptor_state> get_descriptor_info(device_data* dev, int32_t camera_index) const;
     void bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_offset = 0);
+    void push(basic_pipeline& pipeline, vk::CommandBuffer cmd, int32_t camera_offset = 0);
     static void bind_placeholders(
         basic_pipeline& pipeline,
         size_t max_samplers,
@@ -78,7 +82,6 @@ private:
     friend class scene_update_stage;
 
     void init_acceleration_structures();
-    void init_tlas(size_t device_index);
 
     context* ctx;
     std::vector<camera*> cameras;
@@ -97,6 +100,7 @@ private:
         gpu_buffer scene_metadata;
         gpu_buffer directional_light_data;
         gpu_buffer point_light_data;
+        gpu_buffer tri_light_data;
         gpu_buffer sh_grid_data;
         gpu_buffer shadow_map_data;
         gpu_buffer camera_data;
@@ -112,20 +116,7 @@ private:
     };
     std::vector<scene_buffer> scene_buffers;
 
-    struct acceleration_structure_data
-    {
-        vkm<vk::AccelerationStructureKHR> tlas;
-        vkm<vk::Buffer> tlas_buffer;
-        vkm<vk::Buffer> scratch_buffer;
-        gpu_buffer instance_buffer;
-
-        struct per_frame_data
-        {
-            size_t instance_count;
-        };
-        per_frame_data per_frame[MAX_FRAMES_IN_FLIGHT];
-    };
-    std::vector<acceleration_structure_data> acceleration_structures;
+    std::optional<top_level_acceleration_structure> tlas;
 };
 
 std::vector<uint32_t> get_viewport_reorder_mask(

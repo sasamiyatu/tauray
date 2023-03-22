@@ -99,20 +99,24 @@ void scene::play(const std::string& name, bool loop, bool use_fallback)
     mesh_scene::visit_animated(play_handler);
 }
 
-void scene::update(time_ticks dt)
+void scene::update(time_ticks dt, bool force_update)
 {
-    auto update_handler = [&](animated_node* n){
-        n->update(dt);
-    };
     for(camera* c: cameras)
     {
-        update_handler(c);
         c->step_jitter();
     }
-    for(animated_node* o: control_nodes) update_handler(o);
 
-    light_scene::visit_animated(update_handler);
-    mesh_scene::visit_animated(update_handler);
+    if(dt > 0 || force_update)
+    {
+        auto update_handler = [&](animated_node* n){
+            n->update(dt);
+        };
+        for(camera* c: cameras)
+            update_handler(c);
+        for(animated_node* o: control_nodes) update_handler(o);
+        light_scene::visit_animated(update_handler);
+        mesh_scene::visit_animated(update_handler);
+    }
     total_ticks += dt;
 }
 
@@ -152,13 +156,12 @@ bool scene::is_playing() const
 
 vk::AccelerationStructureKHR scene::get_acceleration_structure(
     size_t device_index
-){
+) const {
     if(!ctx->is_ray_tracing_supported())
         throw std::runtime_error(
             "Trying to use TLAS, but ray tracing is not available!"
         );
-    auto& as = acceleration_structures[device_index];
-    return as.tlas;
+    return *tlas->get_tlas_handle(device_index);
 }
 
 void scene::set_shadow_map_renderer(shadow_map_renderer* smr)
@@ -180,9 +183,8 @@ vec2 scene::get_shadow_map_atlas_pixel_margin() const
         return vec2(0);
 }
 
-void scene::bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_index)
+std::vector<descriptor_state> scene::get_descriptor_info(device_data* dev, int32_t camera_index) const
 {
-    device_data* dev = pipeline.get_device();
     auto& sb = scene_buffers[dev->index];
     const std::vector<sh_grid*>& sh_grids = get_sh_grids();
 
@@ -205,20 +207,10 @@ void scene::bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_
     if(ctx->is_ray_tracing_supported())
         tlas = get_acceleration_structure(dev->index);
 
-    const std::vector<std::pair<const mesh*, int>>& meshes =
-        get_meshes();
-    std::vector<vk::DescriptorBufferInfo> dbi_vertex;
-    std::vector<vk::DescriptorBufferInfo> dbi_index;
-    for(size_t i = 0; i < meshes.size(); ++i)
-    {
-        const mesh* m = meshes[i].first;
-        vk::Buffer vertex_buffer = m->get_vertex_buffer(dev->index);
-        vk::Buffer index_buffer = m->get_index_buffer(dev->index);
-        dbi_vertex.push_back({vertex_buffer, 0, VK_WHOLE_SIZE});
-        dbi_index.push_back({index_buffer, 0, VK_WHOLE_SIZE});
-    }
+    std::vector<vk::DescriptorBufferInfo> dbi_vertex = get_vertex_buffer_bindings(dev->index);
+    std::vector<vk::DescriptorBufferInfo> dbi_index = get_index_buffer_bindings(dev->index);
 
-    pipeline.update_descriptor_set({
+    std::vector<descriptor_state> descriptors = {
         {"scene", {*sb.scene_data, 0, VK_WHOLE_SIZE}},
         {"scene_metadata", {*sb.scene_metadata, 0, VK_WHOLE_SIZE}},
         {"vertices", dbi_vertex},
@@ -228,6 +220,7 @@ void scene::bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_
             *sb.directional_light_data, 0, VK_WHOLE_SIZE
         }},
         {"point_lights", {*sb.point_light_data, 0, VK_WHOLE_SIZE}},
+        {"tri_lights", {*sb.tri_light_data, 0, VK_WHOLE_SIZE}},
         {"environment_map_tex", {
             sb.envmap_sampler.get_sampler(dev->index),
             envmap ? envmap->get_image_view(dev->index) : vk::ImageView{},
@@ -238,21 +231,19 @@ void scene::bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_
         }},
         {"textures3d", dii_3d},
         {"sh_grids", {*sb.sh_grid_data, 0, VK_WHOLE_SIZE}}
-    }, frame_index);
+    };
 
     if(camera_index >= 0)
     {
         std::pair<size_t, size_t> camera_offset = sb.camera_data_offsets[camera_index];
-        pipeline.update_descriptor_set({
+        descriptors.push_back(
             {"camera", {*sb.camera_data, camera_offset.first, VK_WHOLE_SIZE}}
-        }, frame_index);
+        );
     }
 
     if(ctx->is_ray_tracing_supported())
     {
-        pipeline.update_descriptor_set({
-            {"tlas", {1, acceleration_structures[dev->index].tlas}}
-        }, frame_index);
+        descriptors.push_back({"tlas", {1, this->tlas->get_tlas_handle(dev->index)}});
     }
 
     if(smr)
@@ -261,26 +252,45 @@ void scene::bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_
 
         const atlas* shadow_map_atlas = smr->get_shadow_map_atlas();
 
-        pipeline.update_descriptor_set({
-            {"shadow_maps", {
-                *sb.shadow_map_data, 0, sb.shadow_map_range
-            }},
+        descriptors.push_back(
+            {"shadow_maps", {*sb.shadow_map_data, 0, sb.shadow_map_range}}
+        );
+        descriptors.push_back(
             {"shadow_map_cascades", {
                 *sb.shadow_map_data, sb.shadow_map_range,
                 sb.shadow_map_cascade_range
-            }},
+            }}
+        );
+        descriptors.push_back(
             {"shadow_map_atlas", {
                 pl.default_sampler.get_sampler(dev->index),
                 shadow_map_atlas->get_image_view(dev->index),
                 vk::ImageLayout::eShaderReadOnlyOptimal
-            }},
+            }}
+        );
+        descriptors.push_back(
             {"shadow_map_atlas_test", {
                 sb.shadow_sampler.get_sampler(dev->index),
                 shadow_map_atlas->get_image_view(dev->index),
                 vk::ImageLayout::eShaderReadOnlyOptimal
             }}
-        }, frame_index);
+        );
     }
+    return descriptors;
+}
+
+void scene::bind(basic_pipeline& pipeline, uint32_t frame_index, int32_t camera_index)
+{
+    device_data* dev = pipeline.get_device();
+    std::vector<descriptor_state> descriptors = get_descriptor_info(dev, camera_index);
+    pipeline.update_descriptor_set(descriptors, frame_index);
+}
+
+void scene::push(basic_pipeline& pipeline, vk::CommandBuffer cmd, int32_t camera_index)
+{
+    device_data* dev = pipeline.get_device();
+    std::vector<descriptor_state> descriptors = get_descriptor_info(dev, camera_index);
+    pipeline.push_descriptors(cmd, descriptors);
 }
 
 void scene::bind_placeholders(
@@ -313,84 +323,8 @@ void scene::init_acceleration_structures()
 {
     if(!ctx->is_ray_tracing_supported()) return;
 
-    std::vector<device_data>& devices = ctx->get_devices();
-    acceleration_structures.resize(devices.size());
-
-    for(size_t i = 0; i < devices.size(); ++i)
-    {
-        init_tlas(i);
-    }
-}
-
-void scene::init_tlas(size_t i)
-{
-    std::vector<device_data>& devices = ctx->get_devices();
-    auto& as = acceleration_structures[i];
-
     uint32_t total_max_capacity = mesh_scene::get_max_capacity() + light_scene::get_max_capacity();
-    as.instance_buffer = gpu_buffer(
-        devices[i],
-        total_max_capacity * sizeof(VkAccelerationStructureInstanceKHR),
-        vk::BufferUsageFlagBits::eStorageBuffer |
-        vk::BufferUsageFlagBits::eTransferDst |
-        vk::BufferUsageFlagBits::eShaderDeviceAddress|
-        vk::BufferUsageFlagBits::eAccelerationStructureBuildInputReadOnlyKHR
-    );
-
-    vk::AccelerationStructureGeometryKHR geom(
-        VULKAN_HPP_NAMESPACE::GeometryTypeKHR::eInstances,
-        vk::AccelerationStructureGeometryInstancesDataKHR{
-            VK_FALSE, as.instance_buffer.get_address()
-        }
-    );
-
-    vk::AccelerationStructureBuildGeometryInfoKHR tlas_info(
-        vk::AccelerationStructureTypeKHR::eTopLevel,
-        vk::BuildAccelerationStructureFlagBitsKHR::ePreferFastTrace|
-        vk::BuildAccelerationStructureFlagBitsKHR::eAllowUpdate,
-        vk::BuildAccelerationStructureModeKHR::eBuild,
-        VK_NULL_HANDLE,
-        VK_NULL_HANDLE,
-        1,
-        &geom
-    );
-
-    vk::AccelerationStructureBuildSizesInfoKHR size_info =
-        devices[i].dev.getAccelerationStructureBuildSizesKHR(
-            vk::AccelerationStructureBuildTypeKHR::eDevice, tlas_info, {total_max_capacity}
-        );
-
-    vk::BufferCreateInfo tlas_buffer_info(
-        {}, size_info.accelerationStructureSize,
-        vk::BufferUsageFlagBits::eAccelerationStructureStorageKHR|
-        vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        vk::SharingMode::eExclusive
-    );
-    as.tlas_buffer = create_buffer(devices[i], tlas_buffer_info, VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT);
-
-    vk::AccelerationStructureCreateInfoKHR create_info(
-        {},
-        as.tlas_buffer,
-        {},
-        size_info.accelerationStructureSize,
-        vk::AccelerationStructureTypeKHR::eTopLevel,
-        {}
-    );
-    as.tlas = vkm(devices[i], devices[i].dev.createAccelerationStructureKHR(create_info));
-    tlas_info.dstAccelerationStructure = as.tlas;
-
-    vk::BufferCreateInfo scratch_info(
-        {}, size_info.buildScratchSize,
-        vk::BufferUsageFlagBits::eStorageBuffer|
-        vk::BufferUsageFlagBits::eShaderDeviceAddress,
-        vk::SharingMode::eExclusive
-    );
-
-    as.scratch_buffer = create_buffer_aligned(
-        devices[i], scratch_info, VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
-        devices[i].as_props.minAccelerationStructureScratchOffsetAlignment
-    );
-    tlas_info.scratchData = as.scratch_buffer.get_address();
+    tlas.emplace(*ctx, total_max_capacity);
 }
 
 scene::scene_buffer::scene_buffer(device_data& dev)
@@ -399,6 +333,7 @@ scene::scene_buffer::scene_buffer(device_data& dev)
     scene_metadata(dev, 0, vk::BufferUsageFlagBits::eUniformBuffer),
     directional_light_data(dev, 0, vk::BufferUsageFlagBits::eStorageBuffer),
     point_light_data(dev, 0, vk::BufferUsageFlagBits::eStorageBuffer),
+    tri_light_data(dev, 0, vk::BufferUsageFlagBits::eStorageBuffer),
     sh_grid_data(dev, 0, vk::BufferUsageFlagBits::eStorageBuffer),
     shadow_map_data(dev, 0, vk::BufferUsageFlagBits::eStorageBuffer),
     camera_data(dev, 0, vk::BufferUsageFlagBits::eStorageBuffer),

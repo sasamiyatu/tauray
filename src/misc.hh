@@ -8,6 +8,12 @@ namespace tr
 struct device_data;
 class context;
 
+template<typename T, size_t count>
+inline std::string to_string(const vk::ArrayWrapper1D<T, count>& vkstring)
+{
+    return vkstring.data();
+}
+
 // These are for one-off command buffers.
 vk::CommandBuffer begin_command_buffer(device_data& d);
 void end_command_buffer(device_data& d, vk::CommandBuffer cb);
@@ -36,7 +42,8 @@ vkm<vk::Buffer> create_buffer(
     device_data& dev,
     vk::BufferCreateInfo info,
     VmaAllocationCreateFlagBits flags,
-    const void* data = nullptr
+    const void* data = nullptr,
+    vk::CommandBuffer shared_cb = {}
 );
 
 vkm<vk::Buffer> create_buffer_aligned(
@@ -103,6 +110,7 @@ vk::SampleCountFlagBits get_max_available_sample_count(context& ctx);
 
 std::string get_resource_path(const std::string& path);
 std::string load_text_file(const std::string& path);
+bool nonblock_getline(std::string& line);
 
 template<typename T>
 void sorted_insert(
@@ -163,7 +171,7 @@ size_t count_array_layers(const std::vector<T>& targets)
 
 // For lazy CPU profiling ;)
 void profile_tick();
-void profile_tock();
+void profile_tock(const char* message = "Tock: ");
 
 }
 

@@ -84,6 +84,7 @@ void rt_renderer<Pipeline>::set_scene(scene* s)
     opt.projection = s->get_camera(0)->get_projection_type();
     if(s)
     {
+        s->refresh_instance_cache(true);
         for(size_t i = 0; i < per_device.size(); ++i)
         {
             per_device[i].skinning->set_scene(s);
@@ -129,16 +130,13 @@ void rt_renderer<Pipeline>::render()
 
     for(size_t i = 0; i < devices.size(); ++i)
     {
-        dependencies device_deps = per_device[i].skinning->run({});
+        dependencies device_deps = per_device[i].skinning->run(per_device[i].last_frame_deps);
         device_data& dev = devices[i];
-        for(int sample = 0; sample < (opt.accumulate ? opt.samples_per_pixel : 1); ++sample)
-        {
-            device_deps = per_device[i].scene_update->run(device_deps);
-            if(i == ctx->get_display_device().index && sample == 0)
-                device_deps.concat(post_processing.get_gbuffer_write_dependencies());
-
-            device_deps = per_device[i].ray_tracer->run(device_deps);
-        }
+        device_deps = per_device[i].scene_update->run(device_deps);
+        if(i == ctx->get_display_device().index)
+            device_deps.concat(post_processing.get_gbuffer_write_dependencies());
+        device_deps = per_device[i].ray_tracer->run(device_deps);
+        per_device[i].last_frame_deps = device_deps;
 
         if(i != display_device.index)
         {
@@ -255,7 +253,7 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
 
     per_device_data& r = per_device[device_index];
     r.per_frame.resize(MAX_FRAMES_IN_FLIGHT);
-    r.skinning.reset(new skinning_stage(d, opt.max_meshes));
+    r.skinning.reset(new skinning_stage(d, opt.max_instances));
     r.scene_update.reset(new scene_update_stage(d, opt.scene_options));
     r.dist = get_device_distribution_params(
         ctx->get_size(),
@@ -273,16 +271,10 @@ void rt_renderer<Pipeline>::init_device_resources(size_t device_index)
     uvec2 max_target_size = get_distribution_target_max_size(rt_opt.distribution);
     uvec2 target_size = get_distribution_target_size(rt_opt.distribution);
 
-    unsigned color_format_size = sizeof(uint16_t)*4;
+    unsigned color_format_size = sizeof(uint32_t)*4;
     gbuffer_spec spec, copy_spec;
     spec.color_present = true;
-    spec.color_format = vk::Format::eR16G16B16A16Sfloat;
-    if constexpr(std::is_same_v<Pipeline, path_tracer_stage>)
-    {
-        color_format_size = sizeof(uint32_t)*4;
-        spec.color_format = vk::Format::eR32G32B32A32Sfloat;
-        rt_opt.samples_per_pixel = opt.accumulate ? 1 : opt.samples_per_pixel;
-    }
+    spec.color_format = vk::Format::eR32G32B32A32Sfloat;
     post_processing.set_gbuffer_spec(spec);
 
     // Disable raster G-Buffer when nothing rasterizable is needed.
@@ -610,5 +602,6 @@ void rt_renderer<Pipeline>::reset_transfer_command_buffers(
 template class rt_renderer<path_tracer_stage>;
 template class rt_renderer<whitted_stage>;
 template class rt_renderer<feature_stage>;
+template class rt_renderer<direct_stage>;
 
 }

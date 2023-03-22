@@ -1,7 +1,7 @@
 #ifndef TAURAY_SH_PATH_TRACER_HH
 #define TAURAY_SH_PATH_TRACER_HH
 #include "rt_stage.hh"
-#include "film.hh"
+#include "path_tracer_stage.hh"
 
 namespace tr
 {
@@ -14,13 +14,16 @@ public:
     {
         int samples_per_probe = 1;
         int samples_per_invocation = 1;
-        film::filter film = film::BLACKMAN_HARRIS;
+        film_filter film = film_filter::BLACKMAN_HARRIS;
+        multiple_importance_sampling_mode mis_mode =
+            multiple_importance_sampling_mode::MIS_POWER_HEURISTIC;
         float film_radius = 1.0f; // 0.5 is "correct" for the box filter.
         float russian_roulette_delta = 0;
         float temporal_ratio = 0.02f;
         float indirect_clamping = 100.0f;
-        bool importance_sample_envmap = true;
         float regularization_gamma = 1.0f; // 0 disables path regularization
+
+        light_sampling_weights sampling_weights;
 
         int sh_grid_index = 0;
         int sh_order = 2;

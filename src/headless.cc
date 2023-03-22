@@ -1,5 +1,6 @@
 #include "headless.hh"
 #include "misc.hh"
+#include "log.hh"
 #include "tinyexr.h"
 #include "stb_image_write.h"
 #include <iostream>
@@ -298,10 +299,7 @@ void headless::save_image(uint32_t swapchain_index)
     {
         std::string filename = opt.output_prefix;
         if(opt.display_count > 1) filename += std::to_string(display_index)+"_";
-        std::string frame_num_string = std::to_string(id.frame_number);
-        std::string padded_string  = std::string(6 - std::min((size_t)6, frame_num_string.length()), '0') + frame_num_string;
-        //if(!opt.single_frame) filename += std::to_string(id.frame_number);
-        if(!opt.single_frame) filename += padded_string;
+        if(!opt.single_frame) filename += std::to_string(id.frame_number);
 
         reap_workers(true);
         while(save_workers.size() >= std::thread::hardware_concurrency())
@@ -320,14 +318,16 @@ void headless::save_image(uint32_t swapchain_index)
         if(!opt.skip_nan_check)
         {
             for(size_t j = 0; j < image_pixels; ++j)
+            {
                 if(any(isnan(vec4(
                     mem[j*4+0],
                     mem[j*4+1],
                     mem[j*4+2],
                     mem[j*4+3]
-                ))))
-                    std::cout << "NaN pixel at: "
-                        << (j%opt.size.x) << ", " << (j/opt.size.x) << std::endl;
+                )))){
+                    TR_LOG("NaN pixel at: ", (j%opt.size.x), ", ", (j/opt.size.x));
+                }
+            }
         }
 
         if(opt.output_file_type == headless::EXR)
@@ -408,15 +408,19 @@ void headless::save_image(uint32_t swapchain_index)
 
                 {
                     std::lock_guard<std::mutex> lock(save_workers_mutex);
-                    std::cout << "Saved " << filename << std::endl;
+                    TR_LOG("Saved ", filename);
                     w->finished = true;
                 }
                 save_workers_cv.notify_one();
             });
         }
-        else if(opt.output_file_type == headless::PNG)
-        {
-            filename += ".png";
+        // Saving these is similiar enough and they both use stbi_write_*.
+        // Implementations can be separated in the future if they diverge.
+        else if(
+            opt.output_file_type == headless::PNG || 
+            opt.output_file_type == headless::BMP
+        ){
+            filename += opt.output_file_type == headless::PNG ? ".png" : ".bmp";
 
             std::vector<uint8_t> pixel_data(4*image_pixels);
             for(size_t j = 0; j < image_pixels*4; ++j)
@@ -430,10 +434,22 @@ void headless::save_image(uint32_t swapchain_index)
                 pixel_data = std::move(pixel_data),
                 w
             ]() mutable {
-                int ret = stbi_write_png(
-                    filename.c_str(), opt.size.x, opt.size.y, 4, pixel_data.data(),
-                    opt.size.x*4
-                );
+                int ret = opt.output_file_type == headless::PNG ?
+                    stbi_write_png(
+                        filename.c_str(),
+                        opt.size.x,
+                        opt.size.y,
+                        4,
+                        pixel_data.data(),
+                        opt.size.x*4
+                    ) :
+                    stbi_write_bmp(
+                        filename.c_str(),
+                        opt.size.x,
+                        opt.size.y,
+                        4,
+                        pixel_data.data()
+                    );
                 if(ret == 0)
                 {
                     throw std::runtime_error("Failed to write " + filename);
@@ -441,7 +457,7 @@ void headless::save_image(uint32_t swapchain_index)
 
                 {
                     std::lock_guard<std::mutex> lock(save_workers_mutex);
-                    std::cout << "Saved " << filename << std::endl;
+                    TR_LOG("Saved ", filename);
                     w->finished = true;
                 }
                 save_workers_cv.notify_one();
@@ -469,7 +485,7 @@ void headless::save_image(uint32_t swapchain_index)
 
                 {
                     std::lock_guard<std::mutex> lock(save_workers_mutex);
-                    std::cout << "Saved " << filename << std::endl;
+                    TR_LOG("Saved ", filename);
                     w->finished = true;
                 }
                 save_workers_cv.notify_one();

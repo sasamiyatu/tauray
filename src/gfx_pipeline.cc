@@ -336,7 +336,7 @@ void gfx_pipeline::init_pipeline()
             -1
         );
 
-        pipeline = vkm(*dev, dev->dev.createGraphicsPipeline({}, pipeline_info).value);
+        pipeline = vkm(*dev, dev->dev.createGraphicsPipeline(dev->pp_cache, pipeline_info).value);
 
         init_framebuffers();
     }
@@ -354,7 +354,7 @@ void gfx_pipeline::init_pipeline()
             -1
         );
 
-        pipeline = vkm(*dev, dev->dev.createRayTracingPipelineKHR({}, {}, pipeline_info).value);
+        pipeline = vkm(*dev, dev->dev.createRayTracingPipelineKHR({}, dev->pp_cache, pipeline_info).value);
 
         // Create shader binding table
         uint32_t group_handle_size = align_up_to(
@@ -422,7 +422,8 @@ void gfx_pipeline::init_pipeline()
                 {},
                 (uint32_t)sbt_mem.size(),
                 vk::BufferUsageFlagBits::eTransferSrc |
-                vk::BufferUsageFlagBits::eShaderDeviceAddress,
+                vk::BufferUsageFlagBits::eShaderDeviceAddress |
+                vk::BufferUsageFlagBits::eShaderBindingTableKHR,
                 vk::SharingMode::eExclusive
             },
             VMA_ALLOCATION_CREATE_DEDICATED_MEMORY_BIT,
