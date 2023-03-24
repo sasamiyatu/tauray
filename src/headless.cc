@@ -299,7 +299,12 @@ void headless::save_image(uint32_t swapchain_index)
     {
         std::string filename = opt.output_prefix;
         if(opt.display_count > 1) filename += std::to_string(display_index)+"_";
-        if(!opt.single_frame) filename += std::to_string(id.frame_number);
+
+        constexpr size_t n_zero = 6;
+        std::string frame_num_str = std::to_string(id.frame_number);
+        std::string padded_str = std::string(n_zero - std::min(n_zero, frame_num_str.length()), '0') + frame_num_str;
+
+        if(!opt.single_frame) filename += padded_str;
 
         reap_workers(true);
         while(save_workers.size() >= std::thread::hardware_concurrency())
