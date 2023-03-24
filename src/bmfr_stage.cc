@@ -1,5 +1,6 @@
 #include "bmfr_stage.hh"
 #include "misc.hh"
+#include "camera.hh"
 
 namespace tr
 {
@@ -30,10 +31,11 @@ bmfr_stage::bmfr_stage(
     bmfr_fit_timer(dev, "bmfr fitting(" + std::to_string(current_features.get_layer_count()) + " viewports)"),
     bmfr_weighted_sum_timer(dev, "bmfr weighted sum(" + std::to_string(current_features.get_layer_count()) + " viewports)"),
     bmfr_accumulate_output_timer(dev, "accumulated output(" + std::to_string(current_features.get_layer_count()) + " viewports)"),
-    image_copy_timer(dev, "image copy(" + std::to_string(current_features.get_layer_count()) + " viewports)")
+    image_copy_timer(dev, "image copy(" + std::to_string(current_features.get_layer_count()) + " viewports)"),
+    jitter_buffer(dev, sizeof(pvec4)* 1, vk::BufferUsageFlagBits::eStorageBuffer)
 {
-    init_resources();
-    record_command_buffers();
+    // init_resources();
+    // record_command_buffers();
 }
 
 shader_source bmfr_stage::load_shader_source(const std::string& path, const options& opt)
@@ -52,6 +54,13 @@ shader_source bmfr_stage::load_shader_source(const std::string& path, const opti
     }
     
     return shader_source(path, defines);
+}
+
+void bmfr_stage::set_scene(scene* cur_scene)
+{
+    this->cur_scene = cur_scene;
+    init_resources();
+    record_command_buffers();
 }
 
 void bmfr_stage::init_resources()
@@ -186,6 +195,7 @@ void bmfr_stage::init_resources()
             {"tmp_buffer", {tmp_data[i], 0, VK_WHOLE_SIZE}},
             {"uniform_buffer", {*ubos[i], 0, VK_WHOLE_SIZE}},
             {"accept_buffer", {accepts[i], 0, VK_WHOLE_SIZE}},
+            {"jitter_info", {*jitter_buffer, 0, VK_WHOLE_SIZE}},
         }, i);
         bmfr_fit_comp.update_descriptor_set({
             {"tmp_buffer", {tmp_data[i], 0, VK_WHOLE_SIZE}},
@@ -232,6 +242,7 @@ void bmfr_stage::init_resources()
                 {{}, tmp_noisy[0][i].view, vk::ImageLayout::eGeneral},
                 {{}, tmp_noisy[1][i].view, vk::ImageLayout::eGeneral}
             }},
+            {"jitter_info", {*jitter_buffer, 0, VK_WHOLE_SIZE}},
         }, i);
     }
 }
@@ -243,6 +254,8 @@ void bmfr_stage::record_command_buffers()
         vk::CommandBuffer cb = begin_compute();
 
         stage_timer.begin(cb, i);
+
+        jitter_buffer.upload(i, cb);
 
         ubos[i].upload(i, cb);
         uvec2 workset_size = ((current_features.get_size()+(31u))/32u) + 1u; // One workset = one 32*32 block
@@ -324,6 +337,21 @@ void bmfr_stage::update(uint32_t frame_index)
 {
     uint32_t frame_counter = dev->ctx->get_frame_counter();
     ubos[frame_index].update(frame_index, &frame_counter, 0, sizeof(uint32_t));
+
+    bool existing = jitter_history.size() != 0;
+    size_t viewport_count = opt.active_viewport_count;
+    jitter_history.resize(viewport_count);
+
+    for (size_t i = 0; i < viewport_count; ++i)
+    {
+        vec4& v = jitter_history[i];
+        vec2 cur_jitter = cur_scene->get_camera(i)->get_jitter();
+        vec2 prev_jitter = v;
+        if (!existing) prev_jitter = cur_jitter;
+        v = vec4(cur_jitter, prev_jitter);
+    }
+
+    jitter_buffer.update(frame_index, jitter_history.data());
 }
 
 void bmfr_stage::copy_image(vk::CommandBuffer& cb, uint32_t frame_index, render_target& src, render_target& dst)

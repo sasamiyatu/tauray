@@ -39,6 +39,10 @@ layout(binding = 14, set = 0) buffer accept_buf_t
 {
     uint8_t accepts[];
 } accept_buffer;
+layout(binding = 15, set = 0) buffer jitter_info_buffer
+{
+    vec4 jitter[];
+} jitter_info;
 
 vec3 get_specular(ivec3 p)
 {
@@ -113,9 +117,21 @@ void main()
     vec3 curr_pos = imageLoad(in_pos, p).xyz;
     float sum_w = 0.0;
     {
-        vec2 motion = vec2(imageLoad(in_screen_motion,p));
+        // vec2 motion = vec2(imageLoad(in_screen_motion,p));
+        // motion.y = 1.f - motion.y;
+        // motion = motion * vec2(control.size) - vec2(0.5);
+        vec4 jitter_history = jitter_info.jitter[p.z];
+        vec2 cur_jitter = jitter_history.xy;
+        vec2 prev_jitter = jitter_history.zw;
+        
+        vec4 full_motion = imageLoad(in_screen_motion, p);
+        vec2 motion = full_motion.xy;
+        // Remove jitter caused by TAA
+        motion -= (cur_jitter - prev_jitter)*0.5f;
         motion.y = 1.f - motion.y;
-        motion = motion * vec2(control.size) - vec2(0.5);
+        motion = motion * vec2(control.size)- vec2(0.5);
+
+        
 
         ivec3 tl_sample = ivec3(floor(vec3(motion.x, motion.y, p.z)));
         ivec3 tr_sample = ivec3(floor(vec3(tl_sample.x+1, tl_sample.y, p.z)));

@@ -63,7 +63,7 @@ int get_linear_group_id()
     return int(gl_WorkGroupID.y * gl_NumWorkGroups.x + gl_WorkGroupID.x);
 }
 
-#define NOISE_AMOUNT 1e-2
+#define NOISE_AMOUNT 1e-1
 
 float add_random(float value, inout random_sampler s)
 {

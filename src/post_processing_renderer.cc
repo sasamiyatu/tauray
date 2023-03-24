@@ -242,6 +242,7 @@ void post_processing_renderer::init_pipelines()
             prev_gbuffer,
             opt.bmfr.value()
         ));
+        bmfr->set_scene(cur_scene);
     }
 
     if(opt.taa.has_value())

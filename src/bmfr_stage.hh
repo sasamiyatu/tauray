@@ -6,6 +6,7 @@
 #include "gbuffer.hh"
 #include "timer.hh"
 #include "gpu_buffer.hh"
+#include "scene.hh"
 
 namespace tr
 {
@@ -21,6 +22,7 @@ public:
     struct options
     {
         bmfr_settings settings;
+        size_t active_viewport_count = 1;
     };
 
     bmfr_stage(
@@ -32,6 +34,7 @@ public:
     bmfr_stage(const bmfr_stage& other) = delete;
     bmfr_stage(bmfr_stage&& other) = delete;
 
+    void set_scene(scene* cur_scene);
     virtual void update(uint32_t frame_index) override;
 
 private:
@@ -58,6 +61,9 @@ private:
     vkm<vk::Buffer> weights[MAX_FRAMES_IN_FLIGHT];
     vkm<vk::Buffer> accepts[MAX_FRAMES_IN_FLIGHT];
     gpu_buffer ubos[MAX_FRAMES_IN_FLIGHT];
+    std::vector<vec4> jitter_history;
+    gpu_buffer jitter_buffer;
+    scene* cur_scene;
     std::unique_ptr<texture> rt_textures[10];
     options opt;
     timer stage_timer, bmfr_preprocess_timer, bmfr_fit_timer, bmfr_weighted_sum_timer, bmfr_accumulate_output_timer, image_copy_timer;
