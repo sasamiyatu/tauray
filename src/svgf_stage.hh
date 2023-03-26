@@ -54,6 +54,9 @@ private:
     render_target svgf_spec_hist;
     std::unique_ptr<texture> render_target_texture[8];
     timer svgf_timer;
+    timer accumulation_timer;
+    timer spatial_timer;
+    timer variance_estimate;
 
     std::vector<vec4> jitter_history;
     gpu_buffer jitter_buffer;

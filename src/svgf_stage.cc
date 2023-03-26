@@ -40,6 +40,9 @@ svgf_stage::svgf_stage(
     input_features(input_features),
     prev_features(prev_features),
     svgf_timer(dev, "svgf (" + std::to_string(input_features.get_layer_count()) + " viewports)"),
+    accumulation_timer(dev, "svgf temporal accumulation (" + std::to_string(input_features.get_layer_count()) + " viewports)"),
+    spatial_timer(dev, "svgf atrous (" + std::to_string(input_features.get_layer_count()) + " viewports)"),
+    variance_estimate(dev, "svgf variance estimate (" + std::to_string(input_features.get_layer_count()) + " viewports)"),
     jitter_buffer(dev, sizeof(pvec4)* 1, vk::BufferUsageFlagBits::eStorageBuffer)
 {
 }
@@ -151,9 +154,11 @@ void svgf_stage::record_command_buffers()
         control.temporal_alpha_color = opt.temporal_alpha_color;
         control.temporal_alpha_moments = opt.temporal_alpha_moments;
 
+        accumulation_timer.begin(cb, i);
         temporal_comp.bind(cb, i);
         temporal_comp.push_constants(cb, control);
         cb.dispatch(wg.x, wg.y, input_features.get_layer_count());
+        accumulation_timer.end(cb, i);
 
         vk::MemoryBarrier barrier{
             vk::AccessFlagBits::eShaderWrite,
@@ -165,9 +170,11 @@ void svgf_stage::record_command_buffers()
             {}, barrier, {}, {}
         );
 
+        variance_estimate.begin(cb, i);
         estimate_variance_comp.bind(cb, i);
         estimate_variance_comp.push_constants(cb, control);
         cb.dispatch(wg.x, wg.y, input_features.get_layer_count());
+        variance_estimate.end(cb, i);
 
         cb.pipelineBarrier(
             vk::PipelineStageFlagBits::eComputeShader,
@@ -175,6 +182,7 @@ void svgf_stage::record_command_buffers()
             {}, barrier, {}, {}
         );
 
+        spatial_timer.begin(cb, i);
         atrous_comp.bind(cb);
         atrous_comp.push_descriptors(cb,
             {
@@ -214,6 +222,8 @@ void svgf_stage::record_command_buffers()
             atrous_comp.push_constants(cb, control);
             cb.dispatch(wg.x, wg.y, input_features.get_layer_count());
         }
+
+        spatial_timer.end(cb, i);
 
         cb.pipelineBarrier(
             vk::PipelineStageFlagBits::eComputeShader,
