@@ -1,5 +1,5 @@
 #include "sh_path_tracer_stage.hh"
-#include "scene.hh"
+#include "scene_stage.hh"
 #include "sh_grid.hh"
 #include "environment_map.hh"
 
@@ -20,7 +20,7 @@ struct grid_data_buffer
 
 namespace sh_path_tracer
 {
-    shader_sources load_sources(const sh_path_tracer_stage::options& opt)
+    rt_shader_sources load_sources(const sh_path_tracer_stage::options& opt)
     {
         shader_source pl_rint("shader/path_tracer_point_light.rint");
         shader_source shadow_chit("shader/path_tracer_shadow.rchit");
@@ -45,7 +45,6 @@ namespace sh_path_tracer
         rt_stage::get_common_defines(defines, opt);
 
         return {
-            {}, {},
             {"shader/sh_path_tracer.rgen", defines},
             {
                 {
@@ -103,22 +102,19 @@ namespace tr
 {
 
 sh_path_tracer_stage::sh_path_tracer_stage(
-    device_data& dev,
+    device& dev,
+    scene_stage& ss,
     texture& output_grid,
     vk::ImageLayout output_layout,
     const options& opt
-):  rt_stage(
-        dev,
-        rt_stage::get_common_state(
-            uvec2(0), uvec4(0), sh_path_tracer::load_sources(opt), opt
-        ),
-        opt, "SH path tracing", 1
-    ),
+):  rt_stage(dev, ss, opt, "SH path tracing", 1),
+    gfx(dev, rt_stage::get_common_options(sh_path_tracer::load_sources(opt), opt)),
     opt(opt),
     output_grid(&output_grid),
     output_layout(output_layout),
     grid_data(dev, sizeof(grid_data_buffer), vk::BufferUsageFlagBits::eUniformBuffer)
 {
+    init_descriptors(gfx);
     rt_stage::set_local_sampler_parameters(
         output_grid.get_dimensions(),
         opt.samples_per_probe
@@ -128,8 +124,9 @@ sh_path_tracer_stage::sh_path_tracer_stage(
 void sh_path_tracer_stage::update(uint32_t frame_index)
 {
     rt_stage::update(frame_index);
-    sh_grid* grid = get_scene()->get_sh_grids()[opt.sh_grid_index];
-    mat4 transform = grid->get_global_transform();
+    sh_grid* grid = ss->get_scene()->get<sh_grid>(opt.sh_grid_id);
+    transformable* grid_transform = ss->get_scene()->get<transformable>(opt.sh_grid_id);
+    mat4 transform = grid_transform->get_global_transform();
 
     uint32_t sampling_start_counter =
         dev->ctx->get_frame_counter() * opt.samples_per_probe;
@@ -140,7 +137,7 @@ void sh_path_tracer_stage::update(uint32_t frame_index)
             guni->normal_transform = mat4(get_matrix_orientation(transform));
             guni->grid_size = grid->get_resolution();
             guni->mix_ratio = max(1.0f/dev->ctx->get_frame_counter(), opt.temporal_ratio);
-            guni->cell_scale = 0.5f*vec3(grid->get_resolution())/grid->get_scaling();
+            guni->cell_scale = 0.5f*vec3(grid->get_resolution())/grid_transform->get_scaling();
             guni->rotation_x = pcg(sampling_start_counter)/float(0xFFFFFFFFu);
             guni->rotation_y = pcg(sampling_start_counter+1)/float(0xFFFFFFFFu);
         }
@@ -153,27 +150,28 @@ void sh_path_tracer_stage::init_scene_resources()
 
     for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
-        get_scene()->bind(gfx, i, -1);
+        ss->bind(gfx, i, -1);
         gfx.update_descriptor_set({
-            {"inout_data", {{}, output_grid->get_image_view(dev->index), vk::ImageLayout::eGeneral}},
-            {"grid", {*grid_data, 0, VK_WHOLE_SIZE}}
+            {"inout_data", {{}, output_grid->get_image_view(dev->id), vk::ImageLayout::eGeneral}},
+            {"grid", {grid_data[dev->id], 0, VK_WHOLE_SIZE}}
         }, i);
     }
 }
 
 void sh_path_tracer_stage::record_command_buffer(
-    vk::CommandBuffer cb, uint32_t frame_index, uint32_t pass_index
+    vk::CommandBuffer cb, uint32_t frame_index, uint32_t pass_index,
+    bool /*first_in_command_buffer*/
 ){
-    grid_data.upload(frame_index, cb);
+    grid_data.upload(dev->id, frame_index, cb);
 
-    sh_grid* grid = get_scene()->get_sh_grids()[opt.sh_grid_index];
+    sh_grid* grid = ss->get_scene()->get<sh_grid>(opt.sh_grid_id);
     uvec3 dim = grid->get_resolution();
 
     vk::ImageMemoryBarrier img_barrier(
         {}, vk::AccessFlagBits::eShaderWrite,
         vk::ImageLayout::eUndefined, vk::ImageLayout::eGeneral,
         VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED,
-        output_grid->get_image(dev->index),
+        output_grid->get_image(dev->id),
         {vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1}
     );
 
@@ -208,10 +206,9 @@ void sh_path_tracer_stage::record_command_buffer_push_constants(
     uint32_t /*frame_index*/,
     uint32_t /*pass_index*/
 ){
-    scene* cur_scene = get_scene();
     sh_path_tracer::push_constant_buffer control;
 
-    environment_map* envmap = cur_scene->get_environment_map();
+    environment_map* envmap = ss->get_environment_map();
     if(envmap)
     {
         control.environment_factor = vec4(envmap->get_factor(), 1);

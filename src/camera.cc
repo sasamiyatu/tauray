@@ -2,19 +2,11 @@
 #include "json.hpp"
 #include <fstream>
 
-// This stupid wrapper exists because forward declaring nlohmann::json is more
-// complicated than doing this.
-class json: public nlohmann::json
-{
-public:
-    using nlohmann::json::basic_json;
-};
-
 namespace
 {
 using namespace tr;
 
-json matrix_to_json(const mat4& m)
+nlohmann::json matrix_to_json(const mat4& m)
 {
     return {
         m[0][0], m[0][1], m[0][2], m[0][3],
@@ -29,8 +21,8 @@ json matrix_to_json(const mat4& m)
 namespace tr
 {
 
-camera::camera(transformable_node* parent)
-: animated_node(parent), jitter_index(0)
+camera::camera()
+: jitter_index(0)
 {
     perspective(90.0f, 1.0f, 0.1f, 100.0f);
 }
@@ -83,11 +75,6 @@ mat4 camera::get_projection_matrix() const
             "cannot be used in rasterization-based pipelines."
         );
     }
-}
-
-vec3 camera::get_global_view_direction(vec3 local_view) const
-{
-    return get_global_orientation() * local_view;
 }
 
 void camera::set_near(float near)
@@ -318,14 +305,19 @@ ray camera::get_view_ray(vec2 uv, float near_mul) const
     return r;
 }
 
-ray camera::get_global_view_ray(vec2 uv) const
+ray camera::get_global_view_ray(transformable& t, vec2 uv) const
 {
-    return get_global_transform() * get_view_ray(uv);
+    return t.get_global_transform() * get_view_ray(uv);
 }
 
-mat4 camera::get_view_projection() const
+mat4 camera::get_view_projection(transformable& t) const
 {
-    return get_projection_matrix() * glm::inverse(get_global_transform());
+    return get_projection_matrix() * glm::inverse(t.get_global_transform());
+}
+
+mat4 camera::get_view_projection(const mat4& global_transform) const
+{
+    return get_projection_matrix() * glm::inverse(global_transform);
 }
 
 vec3 camera::get_clip_info() const
@@ -434,7 +426,7 @@ size_t camera::get_projection_type_uniform_buffer_size(projection_type type)
     return 0;
 }
 
-void camera::write_uniform_buffer(void* data) const
+void camera::write_uniform_buffer(transformable& self, void* data) const
 {
     switch(type)
     {
@@ -442,7 +434,7 @@ void camera::write_uniform_buffer(void* data) const
     case ORTHOGRAPHIC:
         {
             auto& buf = *static_cast<matrix_camera_data_buffer*>(data);
-            mat4 inv_view = get_global_transform();
+            mat4 inv_view = self.get_global_transform();
             mat4 view = inverse(inv_view);
             vec4 origin = inv_view * vec4(0,0,0,1);
             mat4 projection = get_projection_matrix();
@@ -459,7 +451,7 @@ void camera::write_uniform_buffer(void* data) const
     case EQUIRECTANGULAR:
         {
             auto& buf = *static_cast<equirectangular_camera_data_buffer*>(data);
-            mat4 inv_view = get_global_transform();
+            mat4 inv_view = self.get_global_transform();
             mat4 view = inverse(inv_view);
             vec4 origin = inv_view * vec4(0,0,0,1);
 
@@ -470,28 +462,6 @@ void camera::write_uniform_buffer(void* data) const
         }
         break;
     }
-}
-
-json camera::serialize_projection() const
-{
-    switch(type)
-    {
-    case PERSPECTIVE:
-    case ORTHOGRAPHIC:
-        {
-            mat4 projection = get_projection_matrix();
-            return matrix_to_json(projection);
-        }
-    case EQUIRECTANGULAR:
-        {
-            return json({
-                pd.equirectangular.fov.x,
-                pd.equirectangular.fov.y
-            });
-        }
-    }
-    assert(false);
-    return {};
 }
 
 void camera::set_jitter(const std::vector<vec2>& jitter_sequence)
@@ -514,8 +484,8 @@ vec2 camera::get_jitter() const
     return jitter_sequence.size() == 0 ? vec2(0) : jitter_sequence[jitter_index];
 }
 
-camera_log::camera_log(camera* cam)
-: cam(cam)
+camera_log::camera_log(transformable* cam_transform, camera* cam)
+: cam_transform(cam_transform), cam(cam)
 {
 }
 
@@ -525,13 +495,28 @@ camera_log::~camera_log()
 
 void camera_log::frame(time_ticks dt)
 {
-    frames.push_back({dt, inverse(cam->get_global_transform())});
+    frames.push_back({dt, inverse(cam_transform->get_global_transform())});
 }
 
 void camera_log::write(const std::string& path)
 {
-    json out;
-    out["projection"] = cam->serialize_projection();
+    nlohmann::json out = nlohmann::json::object();
+
+    switch(cam->type)
+    {
+    case camera::PERSPECTIVE:
+    case camera::ORTHOGRAPHIC:
+        out["projection"] = matrix_to_json(cam->get_projection_matrix());
+        break;
+    case camera::EQUIRECTANGULAR:
+        out["projection"] = {
+            cam->pd.equirectangular.fov.x,
+            cam->pd.equirectangular.fov.y
+        };
+        break;
+    default:
+        break;
+    }
 
     for(frame_data fd: frames)
     {

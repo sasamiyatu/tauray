@@ -63,6 +63,7 @@ find_package(czmq QUIET)
 find_package(nng QUIET)
 find_package(libcbor QUIET)
 find_package(Vulkan REQUIRED)
+find_package(assimp REQUIRED)
 
 add_library(tauray-core STATIC
   external/stb_image.c
@@ -71,7 +72,6 @@ add_library(tauray-core STATIC
   external/tinyexr.cc
   external/tinyply.cc
   external/vk_mem_alloc.cc
-  src/aabb_scene.cc
   src/acceleration_structure.cc
   src/animation.cc
   src/atlas.cc
@@ -82,6 +82,8 @@ add_library(tauray-core STATIC
   src/context.cc
   src/dependency.cc
   src/descriptor_state.cc
+  src/device.cc
+  src/device_transfer.cc
   src/direct_stage.cc
   src/distribution_strategy.cc
   src/dshgi_renderer.cc
@@ -95,13 +97,10 @@ add_library(tauray-core STATIC
   src/frame_delay_stage.cc
   src/frame_server.cc
   src/gbuffer.cc
-  src/gfx_pipeline.cc
   src/gltf.cc
   src/gpu_buffer.cc
   src/headless.cc
-  src/heightfield.cc
   src/light.cc
-  src/light_scene.cc
   src/load_balancer.cc
   src/log.cc
   src/looking_glass.cc
@@ -109,32 +108,30 @@ add_library(tauray-core STATIC
   src/material.cc
   src/math.cc
   src/mesh.cc
-  src/mesh_object.cc
-  src/mesh_scene.cc
   src/misc.cc
   src/model.cc
+  src/assimp.cc
   src/openxr.cc
   src/options.cc
-  src/patched_sphere.cc
   src/path_tracer_stage.cc
   src/placeholders.cc
-  src/plane.cc
-  src/ply.cc
   src/post_processing_renderer.cc
+  src/progress_tracker.cc
   src/radix_sort.cc
+  src/raster_pipeline.cc
   src/raster_stage.cc
   src/raster_renderer.cc
   src/rectangle_packer.cc
   src/render_target.cc
   src/rt_camera_stage.cc
   src/rt_common.cc
-  src/rt_stage.cc
+  src/rt_pipeline.cc
   src/rt_renderer.cc
+  src/rt_stage.cc
   src/sampler.cc
   src/sampler_table.cc
   src/scene.cc
-  src/scene_graph.cc
-  src/scene_update_stage.cc
+  src/scene_stage.cc
   src/server_context.cc
   src/sh_grid.cc
   src/sh_compact_stage.cc
@@ -143,8 +140,6 @@ add_library(tauray-core STATIC
   src/shader_source.cc
   src/shadow_map.cc
   src/shadow_map_stage.cc
-  src/shadow_map_renderer.cc
-  src/skinning_stage.cc
   src/spatial_reprojection_stage.cc
   src/stage.cc
   src/stitch_stage.cc
@@ -172,7 +167,7 @@ target_include_directories(tauray-core PUBLIC SYSTEM
     "external/SPIRV-Headers/include"
     "external/Vulkan-Headers/include"
 )
-target_link_libraries(tauray-core PUBLIC SDL2::SDL2 glm::glm glslang SPIRV openxr_loader Vulkan::Vulkan vk-radix-sort)
+target_link_libraries(tauray-core PUBLIC SDL2::SDL2 glm::glm glslang SPIRV openxr_loader Vulkan::Vulkan vk-radix-sort assimp::assimp)
 target_link_libraries(tauray PUBLIC tauray-core SDL2::SDL2main)
 
 if(MSVC)

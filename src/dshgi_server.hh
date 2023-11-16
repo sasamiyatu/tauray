@@ -2,9 +2,8 @@
 #define TAURAY_DSHGI_SERVER_HH
 #include "context.hh"
 #include "texture.hh"
-#include "scene_update_stage.hh"
+#include "scene_stage.hh"
 #include "sh_renderer.hh"
-#include "skinning_stage.hh"
 #include "renderer.hh"
 #include <condition_variable>
 #include <thread>
@@ -14,7 +13,6 @@
 namespace tr
 {
 
-class scene;
 class sh_grid_to_cpu_stage;
 class dshgi_server: public renderer
 {
@@ -22,7 +20,6 @@ public:
     struct options
     {
         sh_renderer::options sh;
-        size_t max_skinned_meshes;
         uint16_t port_number;
     };
 
@@ -40,15 +37,17 @@ private:
     context* ctx;
     options opt;
     scene* cur_scene = nullptr;
-    std::unique_ptr<skinning_stage> skinning;
-    std::unique_ptr<scene_update_stage> scene_update;
+    std::unique_ptr<scene_stage> scene_update;
     std::unique_ptr<sh_grid_to_cpu_stage> sh_grid_to_cpu;
-    sh_renderer sh;
+    std::optional<sh_renderer> sh;
 
     std::mutex frame_queue_mutex;
     std::condition_variable frame_queue_cv;
     std::vector<dependencies> frame_queue;
     vkm<vk::Semaphore> sender_semaphore;
+
+    std::optional<event_subscription> update_event;
+    time_ticks timestamp;
 
     std::atomic_bool exit_sender;
     std::atomic_uint subscriber_count;

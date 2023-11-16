@@ -2,11 +2,12 @@
 #include "mesh.hh"
 #include "shader_source.hh"
 #include "placeholders.hh"
-#include "scene.hh"
+#include "scene_stage.hh"
 #include "environment_map.hh"
 #include "misc.hh"
 #include "texture.hh"
 #include "sampler.hh"
+#include "log.hh"
 
 namespace
 {
@@ -24,25 +25,19 @@ struct sampling_data_buffer
 namespace tr
 {
 
-gfx_pipeline::pipeline_state rt_stage::get_common_state(
-    uvec2 output_size,
-    uvec4 viewport,
-    const shader_sources& src,
+rt_pipeline::options rt_stage::get_common_options(
+    const rt_shader_sources& src,
     const options& opt,
     vk::SpecializationInfo specialization
 ){
-    gfx_pipeline::pipeline_state state = {
-        output_size,
-        viewport,
+    rt_pipeline::options state = {
         src,
         {
             {"vertices", (uint32_t)opt.max_instances},
             {"indices", (uint32_t)opt.max_instances},
             {"textures", (uint32_t)opt.max_samplers},
         },
-        mesh::get_bindings(),
-        mesh::get_attributes(),
-        {}, {},
+        1, {}, false
     };
     state.specialization = specialization;
     return state;
@@ -74,41 +69,25 @@ void rt_stage::get_common_defines(
 }
 
 rt_stage::rt_stage(
-    device_data& dev,
-    const gfx_pipeline::pipeline_state& state,
+    device& dev,
+    scene_stage& ss,
     const options& opt,
     const std::string& timer_name,
     unsigned pass_count
-):  stage(dev),
-    gfx(dev, state),
+):  single_device_stage(dev),
+    ss(&ss),
     opt(opt),
     pass_count(pass_count),
     rt_timer(dev, timer_name),
-    cur_scene(nullptr),
     sampling_data(
         dev, sizeof(sampling_data_buffer),
         vk::BufferUsageFlagBits::eUniformBuffer
     ),
     sampling_frame_counter_increment(1),
-    sample_counter(0)
+    sample_counter(0),
+    scene_state_counter(0),
+    force_refresh(true)
 {
-    init_resources();
-}
-
-void rt_stage::set_scene(scene* s)
-{
-    cur_scene = s;
-    if(s->get_instance_count() > opt.max_instances)
-        throw std::runtime_error(
-            "The scene has more meshes than this pipeline can support!"
-        );
-    init_scene_resources();
-    record_command_buffers();
-}
-
-scene* rt_stage::get_scene()
-{
-    return cur_scene;
 }
 
 void rt_stage::set_local_sampler_parameters(
@@ -135,27 +114,42 @@ void rt_stage::update(uint32_t frame_index)
         }
     );
     sample_counter += sampling_frame_counter_increment;
+
+    if(ss->check_update(scene_stage::GEOMETRY|scene_stage::LIGHT|scene_stage::ENVMAP, scene_state_counter))
+    {
+        if(ss->get_instances().size() > opt.max_instances)
+            throw std::runtime_error(
+                "The scene has more meshes than this pipeline can support!"
+            );
+        init_scene_resources();
+        record_command_buffers();
+        force_refresh = false;
+    }
+
+    if(force_refresh)
+    {
+        record_command_buffers();
+        force_refresh = false;
+    }
 }
 
-void rt_stage::init_resources()
+void rt_stage::init_scene_resources() {}
+
+void rt_stage::init_descriptors(basic_pipeline& pp)
 {
     // Init descriptor set references to some placeholder value to silence
     // the validation layer (these should never actually be accessed)
-    gfx.update_descriptor_set({
+    pp.update_descriptor_set({
         {"vertices", opt.max_instances},
         {"indices", opt.max_instances},
         {"textures", opt.max_samplers}
     });
     for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
-        gfx.update_descriptor_set({
-            {"sampling_data", {*sampling_data, 0, VK_WHOLE_SIZE}}
+        pp.update_descriptor_set({
+            {"sampling_data", {sampling_data[dev->id], 0, VK_WHOLE_SIZE}}
         }, i);
     }
-}
-
-void rt_stage::init_scene_resources()
-{
 }
 
 unsigned rt_stage::get_pass_count() const
@@ -168,14 +162,29 @@ void rt_stage::record_command_buffers()
     clear_commands();
     for(size_t i = 0; i < MAX_FRAMES_IN_FLIGHT; ++i)
     {
-        vk::CommandBuffer cb = begin_graphics();
-        rt_timer.begin(cb, i);
-        sampling_data.upload(i, cb);
-        for(size_t j = 0; j < pass_count; ++j)
-            record_command_buffer(cb, i, j);
-        rt_timer.end(cb, i);
-        end_graphics(cb, i);
+        size_t pass_count_left = pass_count;
+        while(pass_count_left != 0)
+        {
+            vk::CommandBuffer cb = begin_graphics();
+            if(pass_count_left == pass_count)
+                rt_timer.begin(cb, dev->id, i);
+            sampling_data.upload(dev->id, i, cb);
+            size_t local_pass_count = opt.max_passes_per_command_buffer == 0 ?
+                pass_count :
+                min(pass_count_left, opt.max_passes_per_command_buffer);
+            for(size_t j = 0; j < local_pass_count; ++j)
+                record_command_buffer(cb, i, (pass_count - pass_count_left) + j, j == 0);
+            pass_count_left -= local_pass_count;
+            if(pass_count_left == 0)
+                rt_timer.end(cb, dev->id, i);
+            end_graphics(cb, i);
+        }
     }
+}
+
+void rt_stage::force_command_buffer_refresh()
+{
+    force_refresh = true;
 }
 
 }

@@ -11,6 +11,10 @@
     TR_INT_SOPT(height, 'h', "Set viewport height.", 720, 0, INT_MAX) \
     TR_BOOL_SOPT(fullscreen, 'f', "Enable fullscreen mode.") \
     TR_BOOL_SOPT(vsync, 's', "Enable vertical synchronization.") \
+    TR_BOOL_SOPT( \
+        progress, 'p', \
+        "Add a progress bar, useful for long offline renders." \
+    ) \
     TR_BOOL_OPT(hdr, "Try to find an HDR swap chain.", false) \
     TR_BOOL_SOPT(timing, 't', "Print frame times.") \
     TR_SETINT_OPT(devices, \
@@ -27,7 +31,8 @@
         "Compression algorithm for use with captured frames. Not all EXR " \
         "viewers support all algorithms, and some algorithms can cause " \
         "massive delays in saving. Uncompressed images have very large " \
-        "on-disk footprint. All available algorithms are lossless.", \
+        "on-disk footprint. All available algorithms are lossless. " \
+        "This option is respected only when using the EXR filetype.", \
         headless::PIZ, \
         {"zip", headless::ZIP}, \
         {"zips", headless::ZIPS}, \
@@ -45,7 +50,10 @@
     TR_VECFLOAT_OPT(workload, \
         "Specify initial workload ratios per device, default is even workload.") \
     TR_ENUM_OPT(format, headless::pixel_format, \
-        "Data format for the pixels in captured frames.", \
+        "Data format for the pixels in captured frames. " \
+        "This option is respected only when using the EXR filetype. " \
+        "PNG uses 8-bit rgba, BMP uses 8-bit rgb, and HDR uses 8 bits per " \
+        "color and a shared 8-bit exponent, 32 bits per pixel in total.", \
         headless::RGB16, \
         {"rgb16", headless::RGB16}, \
         {"rgb32", headless::RGB32}, \
@@ -55,11 +63,15 @@
     TR_ENUM_OPT(filetype, headless::image_file_type, \
         "Image format for the output image. EXR files are the default, but " \
         "if you just want to look at pretty pictures, go for png. The " \
-        "special 'none' type can be used to omit output.", \
+        "special 'none' type can be used to omit output. Note that the dynamic " \
+        "range of the HDR filetype is not utilized by default. The (default) " \
+        "filmic tonemapper clamps the output to [0, 1]. E.g. the linear " \
+        "tonemapper allows larger values.", \
         headless::EXR, \
         {"exr", headless::EXR}, \
         {"png", headless::PNG}, \
         {"bmp", headless::BMP}, \
+        {"hdr", headless::HDR}, \
         {"raw", headless::RAW}, \
         {"none", headless::EMPTY} \
     )\
@@ -369,10 +381,30 @@
         "convergence from the camera, d is the \"depthiness\", and " \
         "r is the view distance (relative to display size) used for "\
         "calculating the vertical FOV.", \
-        TR_STRUCT_OPT_INT(v, 48, 1, INT_MAX) \
-        TR_STRUCT_OPT_FLOAT(m, 2.0f, 0.001f, FLT_MAX) \
-        TR_STRUCT_OPT_FLOAT(d, 2.0f, 0.001f, FLT_MAX) \
-        TR_STRUCT_OPT_FLOAT(r, 2.0f, 0.001f, FLT_MAX) \
+        TR_STRUCT_OPT_INT(viewports, 48, 1, INT_MAX) \
+        TR_STRUCT_OPT_FLOAT(midplane, 2.0f, 0.001f, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(depth, 2.0f, 0.001f, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(relative_dist, 2.0f, 0.001f, FLT_MAX) \
+    )\
+    TR_STRUCT_OPT(lkg_calibration, \
+        "Overrides calibration parameters for a Looking Glass display. " \
+        "Can be used to run one such display without the USB connection. " \
+        "These values can be found from the LKG_calibration folder if you " \
+        "mount the display USB as a drive.", \
+        TR_STRUCT_OPT_INT(display_index, -1, 0, INT_MAX) \
+        TR_STRUCT_OPT_FLOAT(pitch, 0, -FLT_MAX, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(slope, 0, -FLT_MAX, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(center, 0, -FLT_MAX, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(fringe, 0, -FLT_MAX, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(viewCone, 0, 0.0f, FLT_MAX) \
+        TR_STRUCT_OPT_INT(invView, 0, 0, 1) \
+        TR_STRUCT_OPT_FLOAT(verticalAngle, 0, -FLT_MAX, FLT_MAX) \
+        TR_STRUCT_OPT_FLOAT(DPI, 0, 0, FLT_MAX) \
+        TR_STRUCT_OPT_INT(screenW, 0, 1, INT_MAX) \
+        TR_STRUCT_OPT_INT(screenH, 0, 1, INT_MAX) \
+        TR_STRUCT_OPT_INT(flipImageX, 0, 0, 1) \
+        TR_STRUCT_OPT_INT(flipImageY, 0, 0, 1) \
+        TR_STRUCT_OPT_INT(flipSubp, 0, 0, 1) \
     )\
     TR_STRUCT_OPT(taa, \
         "Sets parameters for temporal antialiasing.", \
@@ -520,7 +552,7 @@
 #include "feature_stage.hh"
 #include "raster_stage.hh"
 #include "camera.hh"
-#include "mesh_scene.hh"
+#include "scene.hh"
 #include <string>
 #include <variant>
 #include <stdexcept>

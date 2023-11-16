@@ -1,20 +1,21 @@
-#ifndef TAURAY_RT_PIPELINE_HH
-#define TAURAY_RT_PIPELINE_HH
+#ifndef TAURAY_RT_STAGE_HH
+#define TAURAY_RT_STAGE_HH
 #include "context.hh"
 #include "texture.hh"
-#include "gfx_pipeline.hh"
+#include "basic_pipeline.hh"
 #include "material.hh"
 #include "distribution_strategy.hh"
 #include "sampler_table.hh"
 #include "timer.hh"
 #include "gpu_buffer.hh"
 #include "stage.hh"
+#include "rt_pipeline.hh"
 
 namespace tr
 {
 
-class scene;
-class rt_stage: public stage
+class scene_stage;
+class rt_stage: public single_device_stage
 {
 public:
     enum class sampler_type
@@ -37,12 +38,14 @@ public:
 
         int rng_seed = 0;
         sampler_type local_sampler  = sampler_type::UNIFORM_RANDOM;
+
+        // Small values add overhead but allow more detailed progression
+        // tracking. 0 puts all in one command buffer and is fastest.
+        size_t max_passes_per_command_buffer = 0;
     };
 
-    static gfx_pipeline::pipeline_state get_common_state(
-        uvec2 output_size,
-        uvec4 viewport,
-        const shader_sources& s,
+    static rt_pipeline::options get_common_options(
+        const rt_shader_sources& s,
         const options& opt,
         vk::SpecializationInfo specialization = {}
     );
@@ -53,17 +56,14 @@ public:
     );
 
     rt_stage(
-        device_data& dev,
-        const gfx_pipeline::pipeline_state& local_state,
+        device& dev,
+        scene_stage& ss,
         const options& opt,
         const std::string& timer_name,
         unsigned pass_count = 1
     );
     rt_stage(const rt_stage& other) = delete;
     rt_stage(rt_stage&& other) = delete;
-
-    void set_scene(scene* s);
-    scene* get_scene();
 
     void reset_sample_counter();
 
@@ -77,30 +77,31 @@ protected:
     virtual void record_command_buffer(
         vk::CommandBuffer cb,
         uint32_t frame_index,
-        uint32_t pass_index
+        uint32_t pass_index,
+        bool first_in_command_buffer
     ) = 0;
-    virtual void init_scene_resources();
+    virtual void init_scene_resources() = 0;
+    void init_descriptors(basic_pipeline& pp);
     void record_command_buffers();
+    void force_command_buffer_refresh();
 
     unsigned get_pass_count() const;
 
-    gfx_pipeline gfx;
+    scene_stage* ss;
 
 private:
-    void init_resources();
-
     options opt;
     unsigned pass_count = 1;
     timer rt_timer;
 
-    scene* cur_scene;
     gpu_buffer sampling_data;
     uvec3 sampling_target_size;
     uint32_t sampling_frame_counter_increment;
     uint32_t sample_counter;
+    uint32_t scene_state_counter;
+    bool force_refresh;
 };
 
 }
 
 #endif
-

@@ -7,6 +7,9 @@
     "czmq",
     "nng",
     "libcbor",
+    "assimp",
+    "vulkan",
+    "openxr-loader",
     {
       "name": "sdl2",
       "default-features": false,
@@ -16,7 +19,7 @@
     {
       "name": "sdl2",
       "default-features": false,
-      "features": ["vulkan"],
+      "features": [ "vulkan" ],
       "platform": "windows"
     }
   ]

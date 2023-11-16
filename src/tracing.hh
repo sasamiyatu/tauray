@@ -66,10 +66,15 @@ private:
 
     struct timing_data
     {
+        timing_data() = default;
+        timing_data(timing_data&& other) = default;
+        timing_data(const timing_data& other) = delete;
+
         std::vector<vkm<vk::QueryPool>> timestamp_pools;
 
         std::set<int> available_queries;
         std::map<int, std::string> reserved_queries;
+        std::vector<uint64_t> last_results;
 
         double device_reference_ns;
     };

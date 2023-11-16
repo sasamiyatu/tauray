@@ -32,12 +32,13 @@ void tracing_record::init(unsigned max_timestamps)
             for(size_t j = 0; j < MAX_FRAMES_IN_FLIGHT; ++j)
                 t.timestamp_pools[j] = vkm(
                     devices[i],
-                    devices[i].dev.createQueryPool({
+                    devices[i].logical.createQueryPool({
                         {}, vk::QueryType::eTimestamp, max_timestamps * 2u
                     })
                 );
             for(unsigned j = 0; j < max_timestamps; ++j)
                 t.available_queries.insert(j);
+            t.last_results.resize(max_timestamps*2, 0);
         }
 
         host_reference_ns = std::chrono::duration_cast<std::chrono::duration<double>>(std::chrono::steady_clock::now().time_since_epoch()).count() * 1e9;
@@ -45,7 +46,7 @@ void tracing_record::init(unsigned max_timestamps)
         {
            vk::CalibratedTimestampInfoEXT info;
            info.timeDomain = vk::TimeDomainEXT::eDevice;
-           timing_resources[i].device_reference_ns = double(devices[i].dev.getCalibratedTimestampEXT(info).first)*double(devices[i].props.limits.timestampPeriod);
+           timing_resources[i].device_reference_ns = double(devices[i].logical.getCalibratedTimestampEXT(info).first)*double(devices[i].props.limits.timestampPeriod);
         }
     }
 }
@@ -98,22 +99,30 @@ void tracing_record::device_finish_frame()
     {
         timing_data& t = timing_resources[i];
         std::vector<uint64_t> results(max_timestamps*2u);
-        (void)devices[i].dev.getQueryPoolResults(
+        (void)devices[i].logical.getQueryPoolResults(
             t.timestamp_pools[findex],
             0,
             max_timestamps*2u,
             results.size()*sizeof(uint64_t),
             results.data(),
-            0,
+            sizeof(uint64_t),
             vk::QueryResultFlagBits::e64
         );
         for(const auto& pair: t.reserved_queries)
         {
-            res->device_traces[i].push_back(trace_event{
-                double(results[pair.first*2])*double(devices[i].props.limits.timestampPeriod) - t.device_reference_ns,
-                double(results[pair.first*2+1]-results[pair.first*2])*double(devices[i].props.limits.timestampPeriod),
-                pair.second
-            });
+            // If the timing didn't change, the timer isn't being actively
+            // updated and therefore its section is not running. So, we skip it
+            // in order to avoid getting weird results.
+            if(
+                results[pair.first*2] != t.last_results[pair.first*2] ||
+                results[pair.first*2+1] != t.last_results[pair.first*2+1]
+            ){
+                res->device_traces[i].push_back(trace_event{
+                    double(results[pair.first*2])*double(devices[i].props.limits.timestampPeriod) - t.device_reference_ns,
+                    double(results[pair.first*2+1]-results[pair.first*2])*double(devices[i].props.limits.timestampPeriod),
+                    pair.second
+                });
+            }
         }
         std::sort(
             res->device_traces[i].begin(),
@@ -122,6 +131,7 @@ void tracing_record::device_finish_frame()
                 return a.start_ns < b.start_ns;
             }
         );
+        t.last_results = std::move(results);
     }
 
     device_finished_frame_counter++;

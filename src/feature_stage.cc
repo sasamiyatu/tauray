@@ -8,7 +8,7 @@ using namespace tr;
 
 namespace feature
 {
-    shader_sources load_sources(feature_stage::options opt)
+    rt_shader_sources load_sources(feature_stage::options opt)
     {
         std::string feature;
         switch(opt.feat)
@@ -39,7 +39,7 @@ namespace feature
             feature = "vec4((cam.view * vec4(v.pos, 1) - prev_cam.view * vec4(v.prev_pos, 1)).xyz, 1)";
             break;
         case feature_stage::SCREEN_MOTION:
-            feature = "vec4(get_camera_projection(prev_cam, v.prev_pos), 0, 1)";
+            feature = "vec4(get_camera_projection(prev_cam, v.prev_pos), 1)";
             break;
         case feature_stage::INSTANCE_ID:
             feature = "vec4(gl_InstanceID, gl_PrimitiveID, 0, 1)";
@@ -49,8 +49,7 @@ namespace feature
         rt_camera_stage::get_common_defines(defines, opt);
         defines["FEATURE"] = feature;
 
-        shader_sources fsrc = {
-            {}, {},
+        return {
             {"shader/rt_feature.rgen", defines},
             {
                 {
@@ -61,7 +60,6 @@ namespace feature
             },
             {{"shader/rt_feature.rmiss"}}
         };
-        return fsrc;
     }
 
     struct push_constant_buffer
@@ -79,32 +77,36 @@ namespace tr
 {
 
 feature_stage::feature_stage(
-    device_data& dev,
-    uvec2 ray_count,
+    device& dev,
+    scene_stage& ss,
     const gbuffer_target& output_target,
     const options& opt
-):  rt_camera_stage(
-        dev, output_target,
-        rt_stage::get_common_state(
-            ray_count, uvec4(0, 0, output_target.get_size()),
-            ::feature::load_sources(opt), opt
-        ),
-        opt
-    ),
+):  rt_camera_stage(dev, ss, output_target, opt),
+    gfx(dev, rt_stage::get_common_options(::feature::load_sources(opt), opt)),
     opt(opt)
 {
 }
 
-void feature_stage::record_command_buffer_push_constants(
+void feature_stage::init_scene_resources()
+{
+    rt_camera_stage::init_descriptors(gfx);
+}
+
+void feature_stage::record_command_buffer_pass(
     vk::CommandBuffer cb,
-    uint32_t /*frame_index*/,
-    uint32_t /*pass_index*/
+    uint32_t frame_index,
+    uint32_t /*pass_index*/,
+    uvec3 expected_dispatch_size,
+    bool
 ){
+    gfx.bind(cb, frame_index);
+
     ::feature::push_constant_buffer control;
     control.default_value = opt.default_value;
     control.min_ray_dist = opt.min_ray_dist;
 
     gfx.push_constants(cb, control);
+    gfx.trace_rays(cb, expected_dispatch_size);
 }
 
 }

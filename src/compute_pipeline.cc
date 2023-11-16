@@ -2,25 +2,15 @@
 #include "misc.hh"
 #include <map>
 
-namespace
-{
-using namespace tr;
-
-shader_sources sources(const shader_source& src)
-{
-    shader_sources srcs;
-    srcs.comp = src;
-    return srcs;
-}
-
-}
-
 namespace tr
 {
 
-compute_pipeline::compute_pipeline(device_data& dev, const params& p)
+compute_pipeline::compute_pipeline(device& dev, const params& p)
 :   basic_pipeline(
-        dev, sources(p.src), p.binding_array_lengths,
+        dev,
+        get_bindings(p.src, p.binding_array_lengths),
+        get_binding_names(p.src),
+        get_push_constant_ranges(p.src),
         p.max_descriptor_sets, vk::PipelineBindPoint::eCompute,
         p.use_push_descriptors
     )
@@ -28,7 +18,7 @@ compute_pipeline::compute_pipeline(device_data& dev, const params& p)
     if(p.src.data.empty())
         throw std::runtime_error("The shader source code is missing!");
 
-    vkm<vk::ShaderModule> comp(dev, dev.dev.createShaderModule({
+    vkm<vk::ShaderModule> comp(dev, dev.logical.createShaderModule({
         {}, p.src.data.size() * sizeof(uint32_t), p.src.data.data()
     }));
 
@@ -37,7 +27,7 @@ compute_pipeline::compute_pipeline(device_data& dev, const params& p)
         pipeline_layout, {}, 0
     );
 
-    pipeline = vkm(dev, dev.dev.createComputePipeline(dev.pp_cache, pipeline_info).value);
+    pipeline = vkm(dev, dev.logical.createComputePipeline(dev.pp_cache, pipeline_info).value);
 }
 
 }

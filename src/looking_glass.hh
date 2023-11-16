@@ -3,6 +3,7 @@
 
 #include "context.hh"
 #include "scene.hh"
+#include "camera.hh"
 #include "looking_glass_composition_stage.hh"
 
 #if _WIN32
@@ -41,6 +42,25 @@ public:
         float mid_plane_dist = 2.0f;
         float depthiness = 2.0f;
         float relative_view_distance = 2.0f;
+
+        struct calibration_data
+        {
+            int display_index;
+            float pitch;
+            float slope;
+            float center;
+            float fringe;
+            float viewCone;
+            int invView;
+            float verticalAngle;
+            float DPI;
+            int screenW;
+            int screenH;
+            int flipImageX;
+            int flipImageY;
+            int flipSubp;
+        };
+        std::optional<calibration_data> calibration_override;
     };
 
     looking_glass(const options& opt);
@@ -52,7 +72,7 @@ public:
 
     void setup_cameras(
         scene& s,
-        transformable_node* reference_frame = nullptr
+        transformable* reference_frame = nullptr
     );
 
 protected:
@@ -87,9 +107,6 @@ private:
         float slope = 0;
         float vertical_angle = 0;
         float view_cone = 0;
-        float quilt_aspect = 0;
-        uvec2 quilt_size = uvec2(0);
-        uvec2 tile_count = uvec2(0);
         std::string hardware_version;
         std::string hardware_id;
         size_t index;
@@ -118,7 +135,6 @@ private:
     std::unique_ptr<looking_glass_composition_stage> composition;
     std::vector<vkm<vk::Image>> window_images;
     std::vector<vkm<vk::ImageView>> window_image_views;
-    std::vector<camera> cameras;
 };
 
 }

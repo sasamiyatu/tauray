@@ -11,8 +11,7 @@
 namespace tr
 {
 
-class scene;
-class stitch_stage: public stage
+class stitch_stage: public single_device_stage
 {
 public:
     struct options
@@ -22,7 +21,7 @@ public:
     };
 
     stitch_stage(
-        device_data& dev, 
+        device& dev, 
         uvec2 size,
         const std::vector<gbuffer_target>& images,
         const std::vector<distribution_params>& params,

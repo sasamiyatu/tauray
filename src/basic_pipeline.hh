@@ -21,9 +21,10 @@ public:
     >;
 
     basic_pipeline(
-        device_data& dev,
-        const shader_sources& src,
-        const binding_array_length_info& array_info,
+        device& dev,
+        std::vector<vk::DescriptorSetLayoutBinding>&& bindings,
+        std::map<std::string, uint32_t>&& binding_names,
+        std::vector<vk::PushConstantRange>&& push_constant_ranges,
         uint32_t max_descriptor_sets,
         vk::PipelineBindPoint bind_point,
         bool use_push_descriptors
@@ -55,13 +56,19 @@ public:
         );
     }
 
-    device_data* get_device() const;
+    device* get_device() const;
 
     void bind(vk::CommandBuffer cmd, uint32_t descriptor_set_index) const;
     void bind(vk::CommandBuffer cmd) const;
 
 protected:
-    device_data* dev;
+    void load_shader_module(
+        shader_source src,
+        vk::ShaderStageFlagBits stage,
+        std::vector<vk::PipelineShaderStageCreateInfo>& stages,
+        const vk::SpecializationInfo& specialization
+    );
+    device* dev;
     vk::PipelineBindPoint bind_point;
     vkm<vk::Pipeline> pipeline;
     vkm<vk::PipelineLayout> pipeline_layout;

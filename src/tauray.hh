@@ -3,7 +3,7 @@
 #include "options.hh"
 #include "environment_map.hh"
 #include "scene.hh"
-#include "ply.hh"
+#include "scene_assets.hh"
 #include "log.hh"
 #include <memory>
 #include <vector>
@@ -12,10 +12,8 @@ namespace tr
 {
     struct scene_data
     {
-        std::unique_ptr<environment_map> sky;
-        std::vector<scene_graph> scenes;
+        std::vector<scene_assets> assets;
         std::unique_ptr<scene> s;
-        std::unique_ptr<ply_streamer> ply_stream;
     };
 
     scene_data load_scenes(context& ctx, const options& opt);

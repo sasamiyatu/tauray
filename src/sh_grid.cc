@@ -5,15 +5,13 @@ namespace tr
 
 sh_grid::sh_grid(
     uvec3 resolution,
-    int order,
-    transformable_node* parent
-):  transformable_node(parent), radius(0.0f), order(order),
-    resolution(resolution)
+    int order
+):  radius(0.0f), order(order), resolution(resolution)
 {
 }
 
 texture sh_grid::create_target_texture(
-    device_data& dev,
+    device_mask dev,
     int samples_per_probe
 ){
     int samples_per_invocation = 1;
@@ -36,19 +34,20 @@ texture sh_grid::create_target_texture(
 }
 
 void sh_grid::get_target_sampling_info(
-    device_data& dev,
+    device_mask dev,
     int& samples_per_probe,
     int& samples_per_invocation
 ){
     uint32_t z = resolution.z * samples_per_probe;
-    samples_per_invocation =
-        (z + dev.props.limits.maxImageDimension3D - 1) /
-        dev.props.limits.maxImageDimension3D;
+    uint32_t max_dim = UINT32_MAX;
+    for(device& d: dev)
+        max_dim = min(max_dim, d.props.limits.maxImageDimension3D);
+    samples_per_invocation = (z + max_dim - 1) / max_dim;
     samples_per_probe = (samples_per_probe / samples_per_invocation)
         * samples_per_invocation;
 }
 
-texture sh_grid::create_texture(device_data& dev)
+texture sh_grid::create_texture(device_mask dev)
 {
     return texture(
         dev,
@@ -114,9 +113,9 @@ int sh_grid::get_coef_count(int order)
     return coef;
 }
 
-float sh_grid::point_distance(vec3 p) const
+float sh_grid::point_distance(transformable& self, vec3 p) const
 {
-    vec3 local_p = transpose(get_global_inverse_transpose_transform()) * vec4(p, 1);
+    vec3 local_p = transpose(self.get_global_inverse_transpose_transform()) * vec4(p, 1);
 
     if(all(lessThanEqual(abs(local_p), vec3(1.0f))))
         return 0.0f;
@@ -133,14 +132,14 @@ float sh_grid::point_distance(vec3 p) const
     return -1.0f;
 }
 
-float sh_grid::calc_density() const
+float sh_grid::calc_density(transformable& self) const
 {
-    return (resolution.x * resolution.y * resolution.z) / calc_volume();
+    return (resolution.x * resolution.y * resolution.z) / calc_volume(self);
 }
 
-float sh_grid::calc_volume() const
+float sh_grid::calc_volume(transformable& self) const
 {
-    vec3 size = get_global_scaling() * 2.0f;
+    vec3 size = self.get_global_scaling() * 2.0f;
     return size.x * size.y * size.z;
 }
 

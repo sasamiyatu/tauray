@@ -1,5 +1,5 @@
 #include "path_tracer_stage.hh"
-#include "scene.hh"
+#include "scene_stage.hh"
 #include "misc.hh"
 #include "environment_map.hh"
 
@@ -9,7 +9,7 @@ using namespace tr;
 
 namespace path_tracer
 {
-    shader_sources load_sources(
+    rt_shader_sources load_sources(
         path_tracer_stage::options opt,
         const gbuffer_target& gbuf
     ){
@@ -54,7 +54,6 @@ namespace path_tracer
         rt_camera_stage::get_common_defines(defines, opt);
 
         return {
-            {}, {},
             {"shader/path_tracer.rgen", defines},
             {
                 {
@@ -112,33 +111,39 @@ namespace tr
 {
 
 path_tracer_stage::path_tracer_stage(
-    device_data& dev,
-    uvec2 ray_count,
+    device& dev,
+    scene_stage& ss,
     const gbuffer_target& output_target,
     const options& opt
 ):  rt_camera_stage(
-        dev, output_target,
-        rt_stage::get_common_state(
-            ray_count, uvec4(0,0,output_target.get_size()),
-            path_tracer::load_sources(opt, output_target), opt
-        ),
-        opt,
-        "path tracing",
+        dev, ss, output_target, opt, "path tracing",
         opt.samples_per_pixel / opt.samples_per_pass
     ),
+    gfx(dev, rt_stage::get_common_options(
+        path_tracer::load_sources(opt, output_target), opt
+    )),
     opt(opt)
 {
 }
 
-void path_tracer_stage::record_command_buffer_push_constants(
+void path_tracer_stage::init_scene_resources()
+{
+    rt_camera_stage::init_descriptors(gfx);
+}
+
+void path_tracer_stage::record_command_buffer_pass(
     vk::CommandBuffer cb,
-    uint32_t /*frame_index*/,
-    uint32_t pass_index
+    uint32_t frame_index,
+    uint32_t pass_index,
+    uvec3 expected_dispatch_size,
+    bool first_in_command_buffer
 ){
-    scene* cur_scene = get_scene();
+    if(first_in_command_buffer)
+        gfx.bind(cb, frame_index);
+
     path_tracer::push_constant_buffer control;
 
-    environment_map* envmap = cur_scene->get_environment_map();
+    environment_map* envmap = ss->get_environment_map();
     if(envmap)
     {
         control.environment_factor = vec4(envmap->get_factor(), 1);
@@ -161,6 +166,7 @@ void path_tracer_stage::record_command_buffer_push_constants(
     control.antialiasing = opt.film != film_filter::POINT ? 1 : 0;
 
     gfx.push_constants(cb, control);
+    gfx.trace_rays(cb, expected_dispatch_size);
 }
 
 }
