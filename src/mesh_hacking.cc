@@ -1,0 +1,1139 @@
+#include "tauray.hh"
+#include <iostream>
+#include <fstream>
+#include "scene.hh"
+#include "glm/glm.hpp"
+#include "load_balancer.hh"
+#include "misc.hh"
+#include "dshgi_renderer.hh"
+#include "dshgi_server.hh"
+#include "window.hh"
+#include "openxr.hh"
+#include "looking_glass.hh"
+using namespace tr;
+using namespace monkero;
+using namespace glm;
+
+typedef vec3 velocity;
+
+struct Bullet
+{
+    bool active;
+};
+
+enum class Asteroid_Size
+{
+    Large = 0,
+    Small = 1,
+};
+
+struct Asteroid
+{
+    bool alive;
+    bool just_spawned;
+    Asteroid_Size size;
+};
+
+std::vector<entity>
+generate_cameras(entity cam_id, scene& s, options& opt, bool enable_by_default)
+{
+    if(opt.camera_grid.w * opt.camera_grid.h <= 1 &&
+       opt.camera_offset == vec3(0))
+        return {};
+
+    float width = (opt.camera_grid.w - 1) * opt.camera_grid.x;
+    float height = (opt.camera_grid.h - 1) * opt.camera_grid.y;
+
+    transformable& tracked = *s.get<transformable>(cam_id);
+    camera& parent_cam = *s.get<camera>(cam_id);
+
+    vec2 fov = vec2(parent_cam.get_hfov(), parent_cam.get_vfov());
+    vec2 tfov = tan(glm::radians(fov) * 0.5f);
+
+    quat grid_rotation = tr::angleAxis(
+        glm::radians(opt.camera_grid_roll), vec3(0.0f, 0.0f, 1.0f)
+    );
+
+    std::vector<entity> res;
+    for(int y = 0; y < opt.camera_grid.h; ++y)
+        for(int x = 0; x < opt.camera_grid.w; ++x)
+        {
+            transformable cam_transform(&tracked);
+            camera cam;
+            cam.copy_projection(parent_cam);
+            vec3 grid_pos = grid_rotation *
+                vec3(-width * 0.5f + x * opt.camera_grid.x,
+                     height * 0.5f - y * opt.camera_grid.y,
+                     0);
+            vec2 pan = -vec2(grid_pos.x, grid_pos.y) /
+                (tfov * opt.camera_recentering_distance);
+            cam_transform.set_position(grid_pos + opt.camera_offset);
+            cam.set_pan(pan);
+            res.push_back(s.add(
+                std::move(cam),
+                std::move(cam_transform),
+                camera_metadata{enable_by_default, int(res.size()), false}
+            ));
+        }
+
+    if(res.size() != 0)
+        s.get<camera_metadata>(cam_id)->enabled = false;
+
+    return res;
+}
+
+void set_camera_params(const options& opt, scene& s)
+{
+    s.foreach([&](camera& c) {
+        if(auto proj = opt.force_projection)
+        {
+            switch(*proj)
+            {
+            case camera::PERSPECTIVE:
+                c.perspective(90.0f, 1.0f, 0.1f, 100.0f);
+                break;
+            case camera::ORTHOGRAPHIC:
+                c.ortho(-1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 100.0f);
+                break;
+            case camera::EQUIRECTANGULAR: c.equirectangular(360, 180); break;
+            default: break;
+            }
+        }
+
+        c.set_aspect(
+            opt.aspect_ratio > 0 ? opt.aspect_ratio
+                                 : opt.width / (float)opt.height
+        );
+        if(opt.fov)
+            c.set_fov(opt.fov);
+
+        if(opt.camera_clip_range.near > 0)
+            c.set_near(opt.camera_clip_range.near);
+        if(opt.camera_clip_range.far > 0)
+            c.set_far(opt.camera_clip_range.far);
+
+        if(opt.depth_of_field.f_stop != 0)
+            c.set_focus(
+                opt.depth_of_field.f_stop,
+                opt.depth_of_field.distance,
+                opt.depth_of_field.sides,
+                opt.depth_of_field.angle,
+                opt.depth_of_field.sensor_size
+            );
+    });
+}
+
+float random_float(uint32_t& seed)
+{
+    seed = pcg(seed);
+    return ldexpf((float)seed, -32);
+}
+
+float random_between(float min, float max, uint32_t& seed)
+{
+    float r = random_float(seed);
+    return min + (max - min) * r;
+}
+
+#define ASTEROID_AABB (aabb{vec3(-0.1f), vec3(0.1f)})
+#define ASTEROID_SMALL_AABB (aabb{vec3(-0.1f) * 0.5f, vec3(0.1f) * 0.5f})
+
+renderer* create_renderer(context& ctx, options& opt, scene& s)
+{
+    tonemap_stage::options tonemap;
+    tonemap.tonemap_operator = opt.tonemap;
+    tonemap.exposure = opt.exposure;
+    tonemap.gamma = opt.gamma;
+    tonemap.alpha_grid_background = opt.headless == "";
+    tonemap.post_resolve = opt.tonemap_post_resolve;
+
+    bool use_shadow_terminator_fix = false;
+    bool has_tri_lights = false;
+    bool has_point_lights = s.count<point_light>() + s.count<spotlight>() > 0;
+    bool has_directional_lights = s.count<directional_light>() > 0;
+    s.foreach([&](model& mod) {
+        if(mod.get_shadow_terminator_offset() > 0.0f)
+            use_shadow_terminator_fix = true;
+        for(const model::vertex_group& vg: mod)
+        {
+            if(vg.mat.emission_factor != vec3(0))
+                has_tri_lights = true;
+        }
+    });
+
+    scene_stage::options scene_options;
+    scene_options.max_instances = get_instance_count(s);
+    scene_options.max_lights = s.count<point_light>() + s.count<spotlight>();
+    scene_options.gather_emissive_triangles =
+        has_tri_lights && opt.sample_emissive_triangles > 0;
+    scene_options.pre_transform_vertices = opt.pre_transform_vertices;
+    scene_options.group_strategy = opt.as_strategy;
+
+    taa_stage::options taa;
+    taa.blending_ratio = 1.0f - 1.0f / opt.taa.sequence_length;
+
+    rt_camera_stage::options rc_opt;
+    s.foreach([&](camera& cam) {
+        rc_opt.projection = cam.get_projection_type();
+    });
+    rc_opt.max_instances = scene_options.max_instances;
+    rc_opt.max_samplers = get_sampler_count(s);
+    rc_opt.min_ray_dist = opt.min_ray_dist;
+    rc_opt.max_ray_depth = opt.max_ray_depth;
+    rc_opt.samples_per_pass = min(opt.samples_per_pass, opt.samples_per_pixel);
+    // Round sample count to next multiple of samples_per_pass
+    rc_opt.samples_per_pixel =
+        ((opt.samples_per_pixel + rc_opt.samples_per_pass - 1) /
+         rc_opt.samples_per_pass) *
+        rc_opt.samples_per_pass;
+    rc_opt.rng_seed = opt.rng_seed;
+    rc_opt.local_sampler = opt.sampler;
+    rc_opt.transparent_background = opt.transparent_background;
+    rc_opt.pre_transformed_vertices = opt.pre_transform_vertices;
+    rc_opt.active_viewport_count = opt.spatial_reprojection.size() == 0
+        ? ctx.get_display_count()
+        : opt.spatial_reprojection.size();
+
+    if(opt.progress)
+    {
+        rc_opt.max_passes_per_command_buffer =
+            max(rc_opt.samples_per_pixel / rc_opt.samples_per_pass / 100, 1);
+    }
+
+    light_sampling_weights sampling_weights;
+    sampling_weights.point_lights =
+        has_point_lights ? opt.sample_point_lights : 0.0f;
+    sampling_weights.directional_lights =
+        has_directional_lights ? opt.sample_directional_lights : 0.0f;
+    sampling_weights.envmap = get_environment_map(s) ? opt.sample_envmap : 0.0f;
+    sampling_weights.emissive_triangles =
+        has_tri_lights ? opt.sample_emissive_triangles : 0.0f;
+
+    auto_assign_shadow_maps(
+        s,
+        opt.shadow_map_resolution,
+        vec3(
+            opt.shadow_map_radius, opt.shadow_map_radius, opt.shadow_map_depth
+        ),
+        vec2(opt.shadow_map_bias / 5.0f, opt.shadow_map_bias),
+        opt.shadow_map_cascades,
+        opt.shadow_map_resolution,
+        0.01f,
+        vec2(0.005, opt.shadow_map_bias * 2)
+    );
+
+    if(auto rtype = std::get_if<feature_stage::feature>(&opt.renderer))
+    {
+        feature_renderer::options rt_opt;
+        (rt_camera_stage::options&)rt_opt = rc_opt;
+        rt_opt.default_value = vec4(opt.default_value);
+        rt_opt.feat = *rtype;
+        rt_opt.post_process.tonemap = tonemap;
+        rt_opt.scene_options = scene_options;
+        return new feature_renderer(ctx, rt_opt);
+    }
+    else if(auto rtype = std::get_if<options::basic_pipeline_type>(&opt.renderer))
+    {
+        switch(*rtype)
+        {
+        case options::PATH_TRACER:
+        {
+            path_tracer_renderer::options rt_opt;
+            (rt_camera_stage::options&)rt_opt = rc_opt;
+            rt_opt.use_shadow_terminator_fix =
+                opt.shadow_terminator_fix && use_shadow_terminator_fix;
+            rt_opt.use_white_albedo_on_first_bounce =
+                opt.use_white_albedo_on_first_bounce;
+            rt_opt.film = opt.film;
+            rt_opt.mis_mode = opt.multiple_importance_sampling;
+            rt_opt.film_radius = opt.film_radius;
+            rt_opt.russian_roulette_delta = opt.russian_roulette;
+            rt_opt.indirect_clamping = opt.indirect_clamping;
+            rt_opt.regularization_gamma = opt.regularization;
+            rt_opt.sampling_weights = sampling_weights;
+            rt_opt.bounce_mode = opt.bounce_mode;
+            rt_opt.tri_light_mode = opt.tri_light_mode;
+            rt_opt.post_process.tonemap = tonemap;
+            rt_opt.depth_of_field = opt.depth_of_field.f_stop != 0;
+            if(opt.temporal_reprojection > 0.0f)
+                rt_opt.post_process.temporal_reprojection =
+                    temporal_reprojection_stage::options{
+                        opt.temporal_reprojection, {}};
+            if(opt.spatial_reprojection.size() > 0)
+                rt_opt.post_process.spatial_reprojection =
+                    spatial_reprojection_stage::options{};
+            if(opt.taa.sequence_length != 0)
+                rt_opt.post_process.taa = taa;
+            rt_opt.hide_lights = opt.hide_lights;
+            rt_opt.accumulate = opt.accumulation;
+            rt_opt.post_process.tonemap.reorder = get_viewport_reorder_mask(
+                opt.spatial_reprojection, ctx.get_display_count()
+            );
+            if(opt.denoiser == options::denoiser_type::SVGF)
+            {
+                svgf_stage::options svgf_opt{};
+                svgf_opt.atrous_diffuse_iters =
+                    opt.svgf_params.atrous_diffuse_iter;
+                svgf_opt.atrous_spec_iters = opt.svgf_params.atrous_spec_iter;
+                svgf_opt.atrous_kernel_radius =
+                    opt.svgf_params.atrous_kernel_radius;
+                svgf_opt.sigma_l = opt.svgf_params.sigma_l;
+                svgf_opt.sigma_n = opt.svgf_params.sigma_n;
+                svgf_opt.sigma_z = opt.svgf_params.sigma_z;
+                svgf_opt.temporal_alpha_color = opt.svgf_params.min_alpha_color;
+                svgf_opt.temporal_alpha_moments =
+                    opt.svgf_params.min_alpha_moments;
+                rt_opt.post_process.svgf_denoiser = svgf_opt;
+            }
+            else if(opt.denoiser == options::denoiser_type::BMFR)
+                rt_opt.post_process.bmfr = bmfr_stage::options{
+                    bmfr_stage::bmfr_settings::DIFFUSE_ONLY};
+            rt_opt.scene_options = scene_options;
+            rt_opt.distribution.strategy = opt.distribution_strategy;
+            if(ctx.get_devices().size() == 1)
+                rt_opt.distribution.strategy = DISTRIBUTION_DUPLICATE;
+            return new path_tracer_renderer(ctx, rt_opt);
+        }
+        case options::DIRECT:
+        {
+            direct_renderer::options rt_opt;
+            (rt_camera_stage::options&)rt_opt = rc_opt;
+            rt_opt.film = opt.film;
+            rt_opt.film_radius = opt.film_radius;
+            rt_opt.sampling_weights = sampling_weights;
+            rt_opt.bounce_mode = opt.bounce_mode;
+            rt_opt.tri_light_mode = opt.tri_light_mode;
+            rt_opt.post_process.tonemap = tonemap;
+            if(opt.temporal_reprojection > 0.0f)
+                rt_opt.post_process.temporal_reprojection =
+                    temporal_reprojection_stage::options{
+                        opt.temporal_reprojection, {}};
+            if(opt.spatial_reprojection.size() > 0)
+                rt_opt.post_process.spatial_reprojection =
+                    spatial_reprojection_stage::options{};
+            if(opt.taa.sequence_length != 0)
+                rt_opt.post_process.taa = taa;
+            rt_opt.accumulate = opt.accumulation;
+            rt_opt.post_process.tonemap.reorder = get_viewport_reorder_mask(
+                opt.spatial_reprojection, ctx.get_display_count()
+            );
+            if(opt.denoiser == options::denoiser_type::SVGF)
+            {
+                svgf_stage::options svgf_opt{};
+                svgf_opt.atrous_diffuse_iters =
+                    opt.svgf_params.atrous_diffuse_iter;
+                svgf_opt.atrous_spec_iters = opt.svgf_params.atrous_spec_iter;
+                svgf_opt.atrous_kernel_radius =
+                    opt.svgf_params.atrous_kernel_radius;
+                svgf_opt.sigma_l = opt.svgf_params.sigma_l;
+                svgf_opt.sigma_n = opt.svgf_params.sigma_n;
+                svgf_opt.sigma_z = opt.svgf_params.sigma_z;
+                svgf_opt.temporal_alpha_color = opt.svgf_params.min_alpha_color;
+                svgf_opt.temporal_alpha_moments =
+                    opt.svgf_params.min_alpha_moments;
+                rt_opt.post_process.svgf_denoiser = svgf_opt;
+            }
+            else if(opt.denoiser == options::denoiser_type::BMFR)
+                rt_opt.post_process.bmfr = bmfr_stage::options{
+                    bmfr_stage::bmfr_settings::DIFFUSE_ONLY};
+            rt_opt.scene_options = scene_options;
+            rt_opt.distribution.strategy = opt.distribution_strategy;
+            if(ctx.get_devices().size() == 1)
+                rt_opt.distribution.strategy = DISTRIBUTION_DUPLICATE;
+            return new direct_renderer(ctx, rt_opt);
+        }
+        case options::WHITTED:
+        {
+            whitted_renderer::options rt_opt;
+            (rt_camera_stage::options&)rt_opt = rc_opt;
+            rt_opt.post_process.tonemap = tonemap;
+            rt_opt.scene_options = scene_options;
+            if(opt.taa.sequence_length != 0)
+                rt_opt.post_process.taa = taa;
+            return new whitted_renderer(ctx, rt_opt);
+        }
+        case options::RASTER:
+        {
+            raster_renderer::options rr_opt;
+            rr_opt.max_samplers = get_sampler_count(s);
+            rr_opt.msaa_samples = opt.samples_per_pixel;
+            rr_opt.sample_shading = opt.sample_shading;
+            if(opt.taa.sequence_length != 0)
+                rr_opt.post_process.taa = taa;
+            rr_opt.post_process.tonemap = tonemap;
+            rr_opt.pcf_samples = min(opt.pcf, 64);
+            rr_opt.omni_pcf_samples = min(opt.pcf, 64);
+            rr_opt.pcss_samples = min(opt.pcss, 64);
+            rr_opt.pcss_minimum_radius = opt.pcss_minimum_radius;
+            rr_opt.z_pre_pass = opt.use_z_pre_pass;
+            rr_opt.scene_options = scene_options;
+            return new raster_renderer(ctx, rr_opt);
+        }
+        case options::DSHGI:
+        {
+            dshgi_renderer::options dr_opt;
+            sh_renderer::options sh;
+            (rt_stage::options&)sh = rc_opt;
+            sh.samples_per_probe = opt.samples_per_probe;
+            sh.film = opt.film;
+            sh.film_radius = opt.film_radius;
+            sh.mis_mode = opt.multiple_importance_sampling;
+            sh.russian_roulette_delta = opt.russian_roulette;
+            sh.temporal_ratio = opt.dshgi_temporal_ratio;
+            sh.indirect_clamping = opt.indirect_clamping;
+            sh.regularization_gamma = opt.regularization;
+            sh.sampling_weights = sampling_weights;
+            dr_opt.sh_source = sh;
+            dr_opt.sh_order = opt.sh_order;
+            dr_opt.use_probe_visibility = opt.use_probe_visibility;
+            if(opt.taa.sequence_length != 0)
+                dr_opt.post_process.taa = taa;
+            dr_opt.post_process.tonemap = tonemap;
+            dr_opt.max_samplers = get_sampler_count(s);
+            dr_opt.msaa_samples = opt.samples_per_pixel;
+            dr_opt.sample_shading = opt.sample_shading;
+            dr_opt.pcf_samples = min(opt.pcf, 64);
+            dr_opt.omni_pcf_samples = min(opt.pcf, 64);
+            dr_opt.pcss_samples = min(opt.pcss, 64);
+            dr_opt.pcss_minimum_radius = opt.pcss_minimum_radius;
+            dr_opt.z_pre_pass = opt.use_z_pre_pass;
+            dr_opt.scene_options = scene_options;
+            dr_opt.scene_options.alloc_sh_grids = true;
+            return new dshgi_renderer(ctx, dr_opt);
+        }
+        case options::DSHGI_SERVER:
+        {
+            dshgi_server::options dr_opt;
+            (rt_stage::options&)dr_opt.sh = rc_opt;
+            dr_opt.sh.samples_per_probe = opt.samples_per_probe;
+            dr_opt.sh.film = opt.film;
+            dr_opt.sh.film_radius = opt.film_radius;
+            dr_opt.sh.mis_mode = opt.multiple_importance_sampling;
+            dr_opt.sh.russian_roulette_delta = opt.russian_roulette;
+            dr_opt.sh.temporal_ratio = opt.dshgi_temporal_ratio;
+            dr_opt.sh.indirect_clamping = opt.indirect_clamping;
+            dr_opt.sh.regularization_gamma = opt.regularization;
+            dr_opt.sh.sampling_weights = sampling_weights;
+            dr_opt.port_number = opt.port;
+            return new dshgi_server(ctx, dr_opt);
+        }
+        case options::DSHGI_CLIENT:
+        {
+            dshgi_renderer::options dr_opt;
+            dshgi_client::options client;
+            client.server_address = opt.connect;
+            dr_opt.sh_source = client;
+            dr_opt.sh_order = opt.sh_order;
+            dr_opt.use_probe_visibility = opt.use_probe_visibility;
+            dr_opt.post_process.tonemap = tonemap;
+            if(opt.taa.sequence_length != 0)
+                dr_opt.post_process.taa = taa;
+            dr_opt.max_samplers = get_sampler_count(s);
+            dr_opt.msaa_samples = opt.samples_per_pixel;
+            dr_opt.sample_shading = opt.sample_shading;
+            dr_opt.pcf_samples = min(opt.pcf, 64);
+            dr_opt.omni_pcf_samples = min(opt.pcf / 2, 64);
+            dr_opt.pcss_samples = min(opt.pcss, 64);
+            dr_opt.pcss_minimum_radius = opt.pcss_minimum_radius;
+            dr_opt.z_pre_pass = opt.use_z_pre_pass;
+            dr_opt.scene_options = scene_options;
+            dr_opt.scene_options.alloc_sh_grids = true;
+            return new dshgi_renderer(ctx, dr_opt);
+        }
+        };
+    }
+    return nullptr;
+}
+
+bool aabb_overlap(const aabb& a, const aabb& b)
+{
+    if(a.min.x > b.max.x || b.min.x > a.max.x)
+        return false;
+    if(a.min.y > b.max.y || b.min.y > a.max.y)
+        return false;
+    if(a.min.z > b.max.z || b.min.z > a.max.z)
+        return false;
+
+    return true;
+}
+
+void show_stats(scene& s, options& opt)
+{
+    if(!opt.scene_stats)
+        return;
+
+    std::cout << "\nScene statistics: \n";
+
+    std::set<const mesh*> meshes;
+    s.foreach([&](model& mod) {
+        for(const model::vertex_group& vg: mod) meshes.insert(vg.m);
+    });
+    std::cout << "Number of unique meshes = " << meshes.size() << std::endl;
+    std::cout << "Number of mesh instances = " << get_instance_count(s)
+              << std::endl;
+    //std::cout << "Number of BLASes (depends on settings) = " <<
+    //sd.s->get_blas_group_count() << std::endl;
+
+    //Calculating the number of triangles and dynamic objects
+    uint32_t triangle_count = 0;
+    uint32_t dyn_obj_count = 0;
+    s.foreach([&](transformable& t, model& mod) {
+        for(auto& group: mod)
+            triangle_count += group.m->get_indices().size() / 3;
+        dyn_obj_count += t.is_static() ? 0 : 1;
+    });
+    std::cout << "Number of triangles = " << triangle_count << std::endl;
+
+    uint32_t objects_count = s.count<model>();
+    std::cout << "\nNumber of objects = " << objects_count << std::endl;
+    std::cout << "Static objects = " << objects_count - dyn_obj_count
+              << std::endl;
+    std::cout << "Dynamic objects = " << dyn_obj_count << std::endl;
+
+    std::cout << "\nNumber of textures = " << get_sampler_count(s) << std::endl;
+    std::cout << "Number of point lights = " << s.count<point_light>()
+              << std::endl;
+    std::cout << "Number of spot lights = " << s.count<spotlight>()
+              << std::endl;
+
+    opt.scene_stats = false;
+}
+
+int main(int, char** argv) try
+{
+    std::ios_base::sync_with_stdio(false);
+
+    tr::options opt;
+    tr::parse_command_line_options(argv, opt);
+
+    // Initialize log timer.
+    tr::get_initial_time();
+    std::optional<std::ofstream> timing_output_file;
+
+    if(opt.silent)
+    {
+        tr::enabled_log_types[(uint32_t)tr::log_type::GENERAL] = false;
+        tr::enabled_log_types[(uint32_t)tr::log_type::WARNING] = false;
+    }
+
+    if(opt.timing_output.size() != 0)
+    {
+        timing_output_file.emplace(opt.timing_output, std::ios::binary|std::ios::trunc);
+        tr::log_output_streams[(uint32_t)tr::log_type::TIMING] = &timing_output_file.value();
+    }
+
+    std::unique_ptr<tr::context> ctx(tr::create_context(opt));
+
+    tr::scene_data sd = tr::load_scenes(*ctx, opt);
+    scene& s = *sd.s;
+
+
+    load_balancer lb(*ctx, opt.workload);
+
+    entity cam_id = INVALID_ENTITY;
+    s.foreach([&](entity id,
+                  transformable& cam_t,
+                  animated* cam_a,
+                  camera_metadata& md) {
+        if(md.enabled)
+        {
+            cam_id = id;
+            cam_t.set_parent(nullptr, true);
+            if(cam_a)
+                cam_a->stop();
+        }
+    });
+
+    transformable* cam = s.get<transformable>(cam_id);
+
+    //s.foreach([&](entity e, tr::model* model, tr::point_light* pl, tr::spotlight* sl, transformable* xform) { 
+    //    if(model || pl || sl)
+    //        s.remove(e);
+    //});
+
+    s.foreach([&](entity e, transformable& xform) { xform.set_static(false); });
+
+    constexpr float z_offset = 0.25f;
+    vec3 offscreen_pos = vec3(-10.0f, 10.0f, z_offset);
+    entity spaceship_id = INVALID_ENTITY;
+    entity bullet_id = INVALID_ENTITY;
+    entity asteroid_id = INVALID_ENTITY;
+    s.foreach([&](entity e, name_component& name) {
+        if(spaceship_id == INVALID_ENTITY && name.name == "Spaceship")
+        {
+            spaceship_id = e;
+        }
+        else if(bullet_id == INVALID_ENTITY && name.name == "Bullet")
+        {
+            bullet_id = e;
+        }
+        else if(asteroid_id == INVALID_ENTITY && name.name == "Asteroid_no_5")
+        {
+            asteroid_id = e;
+        }
+        }
+    );
+
+    std::vector<entity> bullet_reservoir;
+    std::vector<entity> asteroid_reservoir;
+
+    {
+        tr::model* model = s.get<tr::model>(bullet_id);
+        transformable* xform = s.get<transformable>(bullet_id);
+        xform->set_position(vec3(-10.0f, 10.0f, z_offset));
+
+        for(int i = 0; i < 10; ++i)
+        {
+            aabb b;
+            b.min = vec3(-0.01f);
+            b.max = vec3(0.01f);
+            entity id = s.add(tr::model(*model), transformable(vec3(-10.0f, 10.0f, z_offset)), velocity(0.0f, 0.0f, 0.0f), Bullet(), aabb(b));
+            bullet_reservoir.push_back(id);
+        }
+
+        s.remove(bullet_id);
+    }
+
+    {
+        tr::model* model = s.get<tr::model>(asteroid_id);
+        transformable* xform = s.get<transformable>(asteroid_id);
+
+        for(int i = 0; i < 100; ++i)
+        {
+            aabb b;
+            b.min = vec3(-0.1f);
+            b.max = vec3(0.1f);
+            entity id = s.add(
+                tr::model(*model),
+                transformable(offscreen_pos),
+                velocity(0.0f, 0.0f, 0.0f),
+                Asteroid(),
+                aabb(b)
+            );
+            asteroid_reservoir.push_back(id);
+        }
+
+        s.remove(asteroid_id);
+    }
+
+
+    s.foreach([&](entity e, name_component& name) {
+        if(name.name.find("Asteroid") != std::string::npos)
+            s.remove(e);
+    });
+
+    {
+        aabb b;
+        b.min = vec3(-0.1f);
+        b.max = vec3(0.1f);
+        s.attach(spaceship_id, aabb(b));
+    }
+
+    uint32_t next_bullet = 0;
+    constexpr float bullet_offset = 0.1f;
+
+    uint32_t next_asteroid = 0;
+
+    transformable* spaceship_xform = s.get<transformable>(spaceship_id);
+    vec3 start_pos = spaceship_xform->get_position();
+    spaceship_xform->set_position(vec3(start_pos.x, start_pos.y, z_offset));
+
+    //
+    //mesh* m = sd.assets[0].meshes[4].get();
+    //material mat;
+    //mat.emission_factor = vec3(0.7, 0.8, 0.1);
+
+    //tr::model model(mat, m);
+
+    ////tr::run(*ctx, sd, opt);
+
+
+    //entity id = s.add(
+    //    transformable(), name_component{"dynamic mesh"}, tr::model(model)
+    //);
+    //printf("Added dynamic entity with id: %d\n", id);
+
+    std::vector<entity> cameras = generate_cameras(cam_id, s, opt, false);
+    if(cameras.size() != 0)
+        s.get<camera_metadata>(cameras[0])->enabled = true;
+
+    std::unique_ptr<renderer> rr;
+
+    float speed = 1.0f;
+    vec3 euler = cam->get_orientation_euler();
+    float pitch = euler.x;
+    float yaw = euler.y;
+    float roll = euler.z;
+    float sensitivity = 0.2;
+    bool paused = false;
+    int camera_index = 0;
+
+    //if(openxr* xr = dynamic_cast<openxr*>(&ctx))
+    //{
+    //    xr->setup_xr_surroundings(s, cam);
+    //    sensitivity = 0;
+    //}
+
+    //if(looking_glass* lkg = dynamic_cast<looking_glass*>(&ctx))
+    //{
+    //    cameras.clear();
+    //    lkg->setup_cameras(s, cam);
+    //}
+
+    s.foreach([&](camera_metadata& md) {
+        md.actively_rendered = opt.spatial_reprojection.count(md.index);
+    });
+    set_camera_jitter(
+        s, get_camera_jitter_sequence(opt.taa.sequence_length, ctx->get_size())
+    );
+
+    std::chrono::steady_clock::time_point start =
+        std::chrono::steady_clock::now();
+    float delta = 0.0f;
+    double total_time = 0.0f;
+    bool focused = true;
+    bool camera_locked = false;
+    bool recreate_renderer = true;
+    bool crash_on_exception = true;
+    bool camera_moved = false;
+
+    float spaceship_acceleration = 1.0f;
+    vec2 spaceship_velocity = vec2(0.0f);
+    float spaceship_angular_velocity = 180.0f;
+    float bullet_speed = 2.0f;
+    float asteroid_spawn_interval = 5.0f;
+    uint32_t asteroid_count = 0;
+    uint32_t max_asteroids = 5;
+    double last_asteroid_spawn = 0.0f;
+    vec2 asteroid_speed_range = vec2(0.1f, 1.0f);
+    uint32_t random_seed = 1337 + 42;
+
+    bool fire_pressed = false;
+
+    ivec3 camera_movement = ivec3(0);
+    ivec2 spaceship_movement = ivec2(0);
+    vec2 play_area_bounds = vec2(1.6f, 0.9f);
+    std::string command_line;
+    while(opt.running)
+    {
+        camera_moved = false;
+        if(nonblock_getline(command_line))
+        {
+            if(parse_command(command_line.c_str(), opt))
+            {
+                set_camera_params(opt, s);
+                recreate_renderer = true;
+                camera_moved = true;
+            }
+        }
+
+        if(recreate_renderer)
+        {
+            try
+            {
+                set_camera_jitter(
+                    s,
+                    get_camera_jitter_sequence(
+                        opt.taa.sequence_length, ctx->get_size()
+                    )
+                );
+                rr.reset(create_renderer(*ctx, opt, s));
+                rr->set_scene(&s);
+                ctx->set_displaying(false);
+                for(int i = 0; i < opt.warmup_frames; ++i)
+                    if(!opt.skip_render)
+                        rr->render();
+                ctx->set_displaying(true);
+            }
+            catch(std::runtime_error& err)
+            {
+                if(crash_on_exception)
+                    throw err;
+                else
+                    TR_ERR(err.what());
+            }
+            show_stats(s, opt);
+
+            recreate_renderer = false;
+        }
+
+        SDL_Event event;
+        while(SDL_PollEvent(&event)) switch(event.type)
+            {
+            case SDL_QUIT: opt.running = false; break;
+            case SDL_KEYDOWN:
+            case SDL_KEYUP:
+                if(event.type == SDL_KEYDOWN)
+                {
+                    if(event.key.keysym.sym == SDLK_ESCAPE)
+                        opt.running = false;
+                    if(event.key.keysym.sym == SDLK_RETURN)
+                        paused = !paused;
+                    if(event.key.keysym.sym == SDLK_PAGEUP)
+                    {
+                        camera_index++;
+                        camera_moved = true;
+                    }
+                    if(event.key.keysym.sym == SDLK_PAGEDOWN)
+                    {
+                        camera_index--;
+                        camera_moved = true;
+                    }
+                    if(event.key.keysym.sym == SDLK_t && !opt.timing)
+                        ctx->get_timing().print_last_trace(opt.trace);
+                    if(event.key.keysym.sym == SDLK_0)
+                    {
+                        // Full camera reset, for when you get lost ;)
+                        cam->set_global_position();
+                        cam->set_global_orientation();
+                        camera_moved = true;
+                    }
+                    if(event.key.keysym.sym == SDLK_F1)
+                    {
+                        camera_locked = !camera_locked;
+                        SDL_SetWindowGrab(
+                            SDL_GetWindowFromID(event.key.windowID),
+                            (SDL_bool)!camera_locked
+                        );
+                        SDL_SetRelativeMouseMode((SDL_bool)!camera_locked);
+                    }
+                    if(event.key.keysym.sym == SDLK_F5)
+                    {
+                        shader_source::clear_binary_cache();
+                        rr.reset();
+                        recreate_renderer = true;
+                        crash_on_exception = false;
+                    }
+                    if(event.key.keysym.sym == SDLK_SPACE)
+                    {
+                        fire_pressed = true;
+                    }
+                }
+                if(event.key.repeat == SDL_FALSE)
+                {
+                    #if 0
+                    int direction = event.type == SDL_KEYDOWN ? 1 : -1;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_W)
+                        camera_movement.z -= direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_S)
+                        camera_movement.z += direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_A)
+                        camera_movement.x -= direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_D)
+                        camera_movement.x += direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_LSHIFT)
+                        camera_movement.y -= direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_SPACE)
+                        camera_movement.y += direction;
+                    #endif
+                    int direction = event.type == SDL_KEYDOWN ? 1 : -1;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_W)
+                        spaceship_movement.x += direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_S)
+                        spaceship_movement.x -= direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_A)
+                        spaceship_movement.y -= direction;
+                    if(event.key.keysym.scancode == SDL_SCANCODE_D)
+                        spaceship_movement.y += direction;
+                }
+                break;
+            case SDL_MOUSEWHEEL:
+                if(event.wheel.y != 0)
+                    speed *= pow(1.1, event.wheel.y);
+                break;
+            case SDL_MOUSEMOTION:
+                if(focused && !camera_locked)
+                {
+                    pitch = std::clamp(
+                        pitch - event.motion.yrel * sensitivity, -90.0f, 90.0f
+                    );
+                    yaw -= event.motion.xrel * sensitivity;
+                    roll = 0;
+                    camera_moved = true;
+                }
+                break;
+            case SDL_WINDOWEVENT:
+                if(event.window.event == SDL_WINDOWEVENT_FOCUS_LOST)
+                    focused = false;
+                if(event.window.event == SDL_WINDOWEVENT_FOCUS_GAINED)
+                    focused = true;
+                break;
+            }
+
+        if(ctx->init_frame())
+            break;
+
+        if(cameras.size() != 0)
+        {
+            s.get<camera_metadata>(cameras[camera_index])->enabled = false;
+            while(camera_index < 0) camera_index += cameras.size();
+            camera_index %= cameras.size();
+            s.get<camera_metadata>(cameras[camera_index])->enabled = true;
+        }
+
+#if 0
+        if(!camera_locked)
+        {
+            camera_movement = clamp(camera_movement, ivec3(-1), ivec3(1));
+            if(camera_movement != ivec3(0))
+                camera_moved = true;
+            cam->translate_local(vec3(camera_movement) * delta * speed);
+            cam->set_orientation(pitch, yaw, roll);
+        }
+#endif
+        {
+            spaceship_movement = clamp(spaceship_movement, ivec2(-1), ivec2(1));
+            vec3 dir = spaceship_xform->get_direction(vec3(0.0f, 0.0f, 1.0f));
+            spaceship_velocity += vec2(dir.x, dir.y) * delta * spaceship_acceleration * (float)spaceship_movement.x;
+            vec3 old_pos = spaceship_xform->get_position();
+            vec3 new_pos = old_pos + vec3(spaceship_velocity.x, spaceship_velocity.y, 0.0f) * delta;
+            //spaceship_xform->translate(vec3(camera_movement.x, -camera_movement.z, 0) * delta * speed);¨
+            spaceship_xform->set_position(new_pos);
+            vec3 pos = spaceship_xform->get_position();
+
+            if(pos.x < -play_area_bounds.x)
+                pos.x += play_area_bounds.x * 2.0f;
+            else if(pos.x > play_area_bounds.x)
+                pos.x -= play_area_bounds.x * 2.0f;
+
+            if(pos.y < -play_area_bounds.y)
+                pos.y += play_area_bounds.y * 2.0f;
+            else if(pos.y > play_area_bounds.y)
+                pos.y -= play_area_bounds.y * 2.0f;
+
+            spaceship_xform->set_position(pos);
+            pos = spaceship_xform->get_position();
+
+            float spaceship_rotation = (float)spaceship_movement.y * spaceship_angular_velocity * delta;
+            spaceship_xform->rotate_local(
+                spaceship_rotation, vec3(0.0f, -1.0f, 0.0f)
+            );
+
+            if(fire_pressed)
+            {
+                entity e = bullet_reservoir[next_bullet++];
+                next_bullet %= bullet_reservoir.size();
+
+                transformable* t = s.get<transformable>(e);
+                velocity* v = s.get<velocity>(e);
+                Bullet* b = s.get<Bullet>(e);
+                b->active = true;
+
+                vec3 bullet_spawn_pos = pos + dir * bullet_offset;
+
+                t->set_position(bullet_spawn_pos);
+                *v = dir * bullet_speed + vec3(spaceship_velocity.x, spaceship_velocity.y, 0.0f);
+
+                fire_pressed = false;
+            }
+
+            s.foreach([=](entity e, transformable& t, velocity& v, Bullet& b) {
+                t.translate(v * delta);
+            });
+
+            #if 1
+            if(total_time - last_asteroid_spawn > asteroid_spawn_interval)
+            {
+                // Spawn asteroid
+                entity e = asteroid_reservoir[next_asteroid++];
+                next_asteroid %= asteroid_reservoir.size();
+
+                float speed_range = asteroid_speed_range.y - asteroid_speed_range.x;
+
+                float speed =
+                    speed_range * random_float(random_seed) + asteroid_speed_range.x;
+
+                float angle = random_float(random_seed) * 2.0f * M_PI;
+                vec2 dir = vec2(cosf(angle), sinf(angle));
+
+                vec3 pos = offscreen_pos;
+                pos.x = random_between(-play_area_bounds.x, play_area_bounds.x, random_seed);
+                pos.y = random_between(-play_area_bounds.y, play_area_bounds.y, random_seed);
+
+                transformable* t = s.get<transformable>(e);
+                t->set_position(pos);
+                t->set_scaling(vec3(1.0f));
+               
+                velocity* v = s.get<velocity>(e);
+                *v = vec3(dir.x, dir.y, 0.0f) * speed;
+
+                aabb* aab = s.get<aabb>(e);
+                *aab = ASTEROID_AABB;
+
+                Asteroid* a = s.get<Asteroid>(e);
+                a->alive = true;
+                a->just_spawned = true;
+
+                last_asteroid_spawn = total_time;
+            }
+            #endif
+
+            s.foreach([=](entity e, transformable& t, velocity& v, Asteroid& a) 
+                { 
+                    if(!a.alive) return;
+                    t.translate(v * delta); 
+                    vec3 pos = t.get_position();
+                    if(pos.x < -play_area_bounds.x)
+                        pos.x += play_area_bounds.x * 2.0f;
+                    else if(pos.x > play_area_bounds.x)
+                        pos.x -= play_area_bounds.x * 2.0f;
+
+                    if(pos.y < -play_area_bounds.y)
+                        pos.y += play_area_bounds.y * 2.0f;
+                    else if(pos.y > play_area_bounds.y)
+                        pos.y -= play_area_bounds.y * 2.0f;
+                    t.set_position(pos);
+                }
+            );
+
+            s.foreach([&](entity e, transformable& bt, Bullet& b, aabb& box) {
+                aabb b_box = box;
+                vec3 pos = bt.get_position();
+                b_box.min += pos;
+                b_box.max += pos;
+                if(!b.active)
+                    return;
+                s.foreach([&](
+                    entity e, transformable& t, Asteroid& a, aabb& box, velocity& v) 
+                    { 
+                        if(!a.alive)
+                            return;
+                        aabb abox = box;
+                        vec3 p2 = t.get_position();
+                        abox.min += p2;
+                        abox.max += p2;
+                        if (a.just_spawned)
+                        {
+                            a.just_spawned = false;
+                        }
+                        else if (aabb_overlap(b_box, abox))
+                        {
+                            if(a.size == Asteroid_Size::Small)
+                            {
+                                a.alive = false;
+                                t.set_position(offscreen_pos);
+                            }
+                            else if (a.size == Asteroid_Size::Large)
+                            {
+                                a.size = Asteroid_Size::Small;
+                                t.set_scaling(vec3(0.5f));
+
+                                float angle = random_between(
+                                    0.0f, M_PI * 2.0f, random_seed
+                                );
+
+                                float speed = glm::length(v) * 0.5f;
+
+
+                                v = vec3(cosf(angle), sinf(angle), 0.f) * speed;
+
+                                box = ASTEROID_SMALL_AABB;
+
+                                for (int i = 1; i <= 2; ++i)
+                                {
+                                    entity e =
+                                        asteroid_reservoir[next_asteroid++];
+                                    next_asteroid %= asteroid_reservoir.size();
+
+                                    vec3 dir = vec3(
+                                        cosf(angle + i * 2.0 * M_PI / 3.0f),
+                                        sinf(angle + i * 2.0 * M_PI / 3.0f),
+                                        0.0f
+                                    );
+
+                                    transformable* t = s.get<transformable>(e);
+                                    t->set_position(p2);
+                                    t->set_scaling(vec3(0.5f));
+
+                                    velocity* v = s.get<velocity>(e);
+                                    *v = dir * speed;
+
+                                    aabb* aab = s.get<aabb>(e);
+                                    *aab = ASTEROID_SMALL_AABB;
+
+                                    Asteroid* a = s.get<Asteroid>(e);
+                                    a->alive = true;
+                                    a->just_spawned = true;
+
+                                    a->size = Asteroid_Size::Small;
+                                }
+                            }
+
+                            b.active = false;
+                            bt.set_position(offscreen_pos);
+                        }
+                    });
+            }
+            );
+        }
+
+
+
+        if(camera_moved || !opt.accumulation)
+        {
+            // With this commented line, sample counter restarts whenever the
+            // camera moves. This makes the noise pattern look still when
+            // moving, which may be unwanted, but could provide lower noise
+            // with some samplers in the future.
+            //if(rr) rr->reset_accumulation(opt.accumulation);
+            if(rr)
+                rr->reset_accumulation(false);
+        }
+
+
+
+        update(s, paused || !opt.animation_flag ? 0 : delta * 1000000);
+
+        try
+        {
+            if(rr)
+                rr->render();
+            else
+            {
+                ctx->end_frame(ctx->begin_frame());
+            }
+        }
+        catch(vk::OutOfDateKHRError& e)
+        {
+            rr.reset();
+            if(window* win = dynamic_cast<window*>(&*ctx))
+                win->recreate_swapchains();
+            else if(openxr* xr = dynamic_cast<openxr*>(&*ctx))
+                xr->recreate_swapchains();
+            else if(looking_glass* lkg = dynamic_cast<looking_glass*>(&*ctx))
+                lkg->recreate_swapchains();
+            else
+                break;
+        }
+        if(opt.timing)
+            ctx->get_timing().print_last_trace(opt.trace);
+
+        if(rr)
+            lb.update(*rr);
+
+        auto end = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = end - start;
+        delta = elapsed.count();
+        total_time += delta;
+        start = end;
+    }
+
+    // Ensure everything is finished before going to destructors.
+    ctx->sync();
+
+    // TODO: This hack prevents SteamVR from freezing on exit. This isn't just
+    // a Tauray bug, it seems every Vulkan+Linux+Nvidia combo causes that...
+    // Remove it once SteamVR isn't busted anymore.
+    if(opt.display == options::display_type::OPENXR)
+        abort();
+
+
+    return 0;
+}
+catch (std::runtime_error& e)
+{
+    // Can't use TR_ERR here, because the logger may not yet be initialized or
+    // it's output file may already be closed.
+    if (strlen(e.what())) std::cerr << e.what() << "\n" << std::endl;
+    return 1;
+}

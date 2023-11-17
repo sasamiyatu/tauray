@@ -25,6 +25,10 @@ struct added_by_this_file {};
 template<typename T>
 T& add_unique_named(scene& s, std::string& name, T&& entry, entity* index = nullptr)
 {
+    if (name == "Asteroid_no_3")
+    {
+        int a = 5;
+    }
     entity id = s.add(std::move(entry), name_component{name}, added_by_this_file{});
     if(index) *index = id;
     return *s.get<T>(id);

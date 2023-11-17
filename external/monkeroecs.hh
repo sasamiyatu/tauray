@@ -68,6 +68,15 @@ SOFTWARE.
 #include <bitset>
 #endif
 
+// Thanks, MSVC -.-
+#ifdef min
+#undef min
+#endif
+
+#ifdef max
+#undef max
+#endif
+
 /** This namespace contains all of MonkeroECS. */
 namespace monkero
 {
@@ -84,8 +93,7 @@ inline constexpr entity INVALID_ENTITY = 0;
 class scene;
 
 /** A built-in event emitted when a component is added to the ECS. */
-template<typename Component>
-struct add_component
+template<typename Component> struct add_component
 {
     entity id; /**< The entity that got the component */
     Component* data; /**< A pointer to the component */
@@ -95,11 +103,11 @@ struct add_component
  * The destructor of class scene will emit remove_component events for all
  * components still left at that point.
  */
-template<typename Component>
-struct remove_component
+template<typename Component> struct remove_component
 {
     entity id; /**< The entity that lost the component */
-    Component* data; /**< A pointer to the component (it's not destroyed quite yet) */
+    Component*
+        data; /**< A pointer to the component (it's not destroyed quite yet) */
 };
 
 /** This class is used to receive events of the specified type(s).
@@ -110,9 +118,13 @@ struct remove_component
  */
 class event_subscription
 {
-friend class scene;
+    friend class scene;
+
 public:
-    inline event_subscription(scene* ctx = nullptr, std::size_t subscription_id = 0);
+    inline event_subscription(
+        scene* ctx = nullptr,
+        std::size_t subscription_id = 0
+    );
     inline explicit event_subscription(event_subscription&& other);
     event_subscription(const event_subscription& other) = delete;
     inline ~event_subscription();
@@ -127,8 +139,7 @@ private:
 
 // Provides event receiving facilities for one type alone. Derive
 // from class receiver instead in your own code.
-template<typename EventType>
-class event_receiver
+template<typename EventType> class event_receiver
 {
 public:
     virtual ~event_receiver() = default;
@@ -149,7 +160,8 @@ public:
 template<typename... ReceiveEvents>
 class receiver: public event_receiver<ReceiveEvents>...
 {
-friend class scene;
+    friend class scene;
+
 private:
     event_subscription sub;
 };
@@ -158,8 +170,7 @@ private:
  * functions allows for accelerated entity searching based on any parameter you
  * want to define. The default does not define any searching operations.
  */
-template<typename Component>
-class search_index
+template<typename Component> class search_index
 {
 public:
     // It's up to you how you want to do this searching. You should return
@@ -192,16 +203,14 @@ public:
     using empty_default_impl = void;
 };
 
-template<typename T, typename=void>
-struct has_bucket_exp_hint: std::false_type { };
+template<typename T, typename = void>
+struct has_bucket_exp_hint: std::false_type
+{};
 
 template<typename T>
-struct has_bucket_exp_hint<
-    T,
-    decltype((void)
-        T::bucket_exp_hint, void()
-    )
-> : std::is_integral<decltype(T::bucket_exp_hint)> { };
+struct has_bucket_exp_hint<T, decltype((void)T::bucket_exp_hint, void())>:
+    std::is_integral<decltype(T::bucket_exp_hint)>
+{};
 
 /** Provides bucket size choice for the component container.
  * To change the number of entries in a bucket for your component type, you have
@@ -213,11 +222,10 @@ struct has_bucket_exp_hint<
  *     `static constexpr std::uint32_t value = N;`
  * Where the bucket size will then be 2**N.
  */
-template<typename T>
-struct component_bucket_exp_hint
+template<typename T> struct component_bucket_exp_hint
 {
-    static constexpr std::uint32_t value = []{
-        if constexpr (has_bucket_exp_hint<T>::value)
+    static constexpr std::uint32_t value = [] {
+        if constexpr(has_bucket_exp_hint<T>::value)
         {
             return T::bucket_exp_hint;
         }
@@ -225,7 +233,8 @@ struct component_bucket_exp_hint
         {
             uint32_t i = 6;
             // Aim for 65kb buckets
-            while((std::max(sizeof(T), 4lu)<<i) < 65536lu)
+            while((std::max(sizeof(T), std::uint64_t(4)) << i) <
+                  std::uint64_t(65536))
                 ++i;
             return i;
         }
@@ -243,18 +252,14 @@ public:
     inline virtual void clear() = 0;
     inline virtual std::size_t size() const = 0;
     inline virtual void update_search_index() = 0;
-    inline virtual void list_entities(
-        std::map<entity, entity>& translation_table
-    ) = 0;
+    inline virtual void
+    list_entities(std::map<entity, entity>& translation_table) = 0;
     inline virtual void concat(
         scene& target,
         const std::map<entity, entity>& translation_table
     ) = 0;
-    inline virtual void copy(
-        scene& target,
-        entity result_id,
-        entity original_id
-    ) = 0;
+    inline virtual void
+    copy(scene& target, entity result_id, entity original_id) = 0;
 };
 
 struct component_container_entity_advancer
@@ -270,8 +275,7 @@ public:
     entity* current_jump_table;
 };
 
-template<typename T>
-class component_container: public component_container_base
+template<typename T> class component_container: public component_container_base
 {
 public:
     using bitmask_type = std::uint64_t;
@@ -282,9 +286,9 @@ public:
     static constexpr bool tag_component = std::is_empty_v<T>;
     static constexpr std::uint32_t bucket_exp =
         component_bucket_exp_hint<T>::value;
-    static constexpr std::uint32_t bucket_mask = (1u<<bucket_exp)-1;
+    static constexpr std::uint32_t bucket_mask = (1u << bucket_exp) - 1;
     static constexpr std::uint32_t bucket_bitmask_units =
-        std::max(1u, (1u<<bucket_exp)>>bitmask_shift);
+        std::max(1u, (1u << bucket_exp) >> bitmask_shift);
 
     component_container(scene& ctx);
     component_container(component_container&& other) = delete;
@@ -296,8 +300,7 @@ public:
 
     void insert(entity id, T&& value);
 
-    template<typename... Args>
-    void emplace(entity id, Args&&... value);
+    template<typename... Args> void emplace(entity id, Args&&... value);
 
     void erase(entity id) override;
 
@@ -310,7 +313,8 @@ public:
 
     class iterator
     {
-    friend class component_container<T>;
+        friend class component_container<T>;
+
     public:
         using component_type = T;
 
@@ -348,21 +352,14 @@ public:
 
     void update_search_index() override;
 
-    void list_entities(
-        std::map<entity, entity>& translation_table
-    ) override;
+    void list_entities(std::map<entity, entity>& translation_table) override;
     void concat(
         scene& target,
         const std::map<entity, entity>& translation_table
     ) override;
-    void copy(
-        scene& target,
-        entity result_id,
-        entity original_id
-    ) override;
+    void copy(scene& target, entity result_id, entity original_id) override;
 
-    template<typename... Args>
-    entity find_entity(Args&&... args) const;
+    template<typename... Args> entity find_entity(Args&&... args) const;
 
 #ifdef MONKERO_CONTAINER_DEBUG_UTILS
     bool test_invariant() const;
@@ -381,8 +378,7 @@ private:
     // Returns a hint to whether the whole bucket should be removed or not.
     bool bitmask_erase(entity id);
 
-    template<typename... Args>
-    void bucket_insert(entity id, Args&&... args);
+    template<typename... Args> void bucket_insert(entity id, Args&&... args);
     void bucket_erase(entity id, bool signal);
     void bucket_self_erase(std::uint32_t bucket_index);
     void try_jump_table_bucket_erase(std::uint32_t bucket_index);
@@ -405,7 +401,10 @@ private:
         std::uint32_t& prev_index
     );
 
-    struct alignas(T) t_mimicker { std::uint8_t pad[sizeof(T)]; };
+    struct alignas(T) t_mimicker
+    {
+        std::uint8_t pad[sizeof(T)];
+    };
 
     // Bucket data
     std::uint32_t entity_count;
@@ -433,7 +432,8 @@ private:
  */
 class scene
 {
-friend class event_subscription;
+    friend class event_subscription;
+
 public:
     /** The constructor. */
     inline scene();
@@ -455,14 +455,12 @@ public:
      *   parameters are optional and can be null if the component is not
      *   present.
      */
-    template<typename F>
-    inline void foreach(F&& f);
+    template<typename F> inline void foreach(F&& f);
 
     /** Same as foreach(), just syntactic sugar.
      * \see foreach()
      */
-    template<typename F>
-    inline void operator()(F&& f);
+    template<typename F> inline void operator()(F&& f);
 
     /** Adds an entity without components.
      * \return The new entity ID.
@@ -475,8 +473,7 @@ public:
      * \param components All components that should be included.
      * \return The new entity ID.
      */
-    template<typename... Components>
-    entity add(Components&&... components);
+    template<typename... Components> entity add(Components&&... components);
 
     /** Adds a component to an existing entity, building it in-place.
      * \param id The entity that components are added to.
@@ -505,8 +502,7 @@ public:
      * \tparam Component The type of component to remove from the entity.
      * \param id The entity whose component to remove.
      */
-    template<typename Component>
-    void remove(entity id);
+    template<typename Component> void remove(entity id);
 
     /** Removes all components of all entities.
      * It also resets the entity counter, so this truly invalidates all
@@ -522,10 +518,8 @@ public:
      * IDs will also change.
      * \warn You should finish batching on the other ECS before calling this.
      */
-    inline void concat(
-        scene& other,
-        std::map<entity, entity>* translation_table = nullptr
-    );
+    inline void
+    concat(scene& other, std::map<entity, entity>* translation_table = nullptr);
 
     /** Copies one entity from another ECS to this one.
      * \param other the other ECS whose entity to copy to this.
@@ -549,16 +543,14 @@ public:
      * \tparam Component the component type to count instances of.
      * \return The number of entities with the specified component.
      */
-    template<typename Component>
-    size_t count() const;
+    template<typename Component> size_t count() const;
 
     /** Checks if an entity has the given component.
      * \tparam Component the component type to check.
      * \param id The id of the entity whose component is checked.
      * \return true if the entity has the given component, false otherwise.
      */
-    template<typename Component>
-    bool has(entity id) const;
+    template<typename Component> bool has(entity id) const;
 
     /** Returns the desired component of an entity.
      * Const version.
@@ -566,16 +558,14 @@ public:
      * \param id The id of the entity whose component to fetch.
      * \return A pointer to the component if present, null otherwise.
      */
-    template<typename Component>
-    const Component* get(entity id) const;
+    template<typename Component> const Component* get(entity id) const;
 
     /** Returns the desired component of an entity.
      * \tparam Component the component type to get.
      * \param id The id of the entity whose component to fetch.
      * \return A pointer to the component if present, null otherwise.
      */
-    template<typename Component>
-    Component* get(entity id);
+    template<typename Component> Component* get(entity id);
 
     /** Uses search_index<Component> to find the desired component.
      * \tparam Component the component type to search for.
@@ -611,8 +601,7 @@ public:
     /** Calls search_index<Component>::update() for the component type.
      * \tparam Component the component type whose search index to update.
      */
-    template<typename Component>
-    void update_search_index();
+    template<typename Component> void update_search_index();
 
     /** Updates search indices of all component types.
      */
@@ -622,25 +611,21 @@ public:
      * \tparam EventType the type of the event to emit.
      * \param event The event to emit.
      */
-    template<typename EventType>
-    void emit(const EventType& event);
+    template<typename EventType> void emit(const EventType& event);
 
     /** Returns how many handlers are present for the given event type.
      * \tparam EventType the type of the event to check.
      * \return the number of event handlers for this EventType.
      */
-    template<typename EventType>
-    size_t get_handler_count() const;
+    template<typename EventType> size_t get_handler_count() const;
 
     /** Adds event handler(s) to the ECS.
-     * \tparam F Callable types, with signature void(scene& ctx, const EventType& e).
-     * \param callbacks The event handler callbacks.
-     * \return ID of the "subscription"
-     * \see subscribe() for RAII handler lifetime.
-     * \see bind_event_handler() for binding to member functions.
+     * \tparam F Callable types, with signature void(scene& ctx, const
+     * EventType& e). \param callbacks The event handler callbacks. \return ID
+     * of the "subscription" \see subscribe() for RAII handler lifetime. \see
+     * bind_event_handler() for binding to member functions.
      */
-    template<typename... F>
-    size_t add_event_handler(F&&... callbacks);
+    template<typename... F> size_t add_event_handler(F&&... callbacks);
 
     /** Adds member functions of an object as event handler(s) to the ECS.
      * \tparam T Type of the object whose members are being bound.
@@ -669,48 +654,43 @@ public:
     void add_receiver(receiver<EventTypes...>& r);
 
     /** Adds event handlers with a subscription object that tracks lifetime.
-     * \tparam F Callable types, with signature void(scene& ctx, const EventType& e).
-     * \param callbacks The event handler callbacks.
-     * \return The subscription object that removes the event handler on its
-     * destruction.
+     * \tparam F Callable types, with signature void(scene& ctx, const
+     * EventType& e). \param callbacks The event handler callbacks. \return The
+     * subscription object that removes the event handler on its destruction.
      */
-    template<typename... F>
-    event_subscription subscribe(F&&... callbacks);
+    template<typename... F> event_subscription subscribe(F&&... callbacks);
 
 private:
-    template<bool pass_id, typename... Components>
-    struct foreach_impl
+    template<bool pass_id, typename... Components> struct foreach_impl
     {
-        template<typename F>
-        static void foreach(scene& ctx, F&& f);
+        template<typename F> static void foreach(scene& ctx, F && f);
 
-        template<typename Component>
-        struct iterator_wrapper
+        template<typename Component> struct iterator_wrapper
         {
             static constexpr bool required = true;
-            typename component_container<std::decay_t<std::remove_pointer_t<std::decay_t<Component>>>>::iterator iter;
+            typename component_container<std::decay_t<
+                std::remove_pointer_t<std::decay_t<Component>>>>::iterator iter;
         };
 
         template<typename Component>
         static inline auto make_iterator(scene& ctx)
         {
-            return iterator_wrapper<Component>{
-                ctx.get_container<std::decay_t<std::remove_pointer_t<std::decay_t<Component>>>>().begin()
-            };
+            return iterator_wrapper<Component>{ctx.get_container<std::decay_t<
+                std::remove_pointer_t<std::decay_t<Component>>>>()
+                                                   .begin()};
         }
 
-        template<typename Component>
-        struct converter
+        template<typename Component> struct converter
         {
-            template<typename T>
-            static inline T& convert(T*);
+            template<typename T> static inline T& convert(T*);
         };
 
         template<typename F>
         static void call(
             F&& f,
             entity id,
-            std::decay_t<std::remove_pointer_t<std::decay_t<Components>>>*... args
+            std::decay_t<
+                std::remove_pointer_t<std::decay_t<Components>>>*... args
         );
     };
 
@@ -731,22 +711,18 @@ private:
     template<typename T, typename U>
     U event_handler_type_detector(void (T::*)(scene&, const U&));
 
-    template<typename Component>
-    void try_attach_dependencies(entity id);
+    template<typename Component> void try_attach_dependencies(entity id);
 
     template<typename Component>
     component_container<Component>& get_container() const;
 
-    template<typename Component>
-    static size_t get_component_type_key();
+    template<typename Component> static size_t get_component_type_key();
     inline static size_t component_type_key_counter = 0;
 
-    template<typename Event>
-    static size_t get_event_type_key();
+    template<typename Event> static size_t get_event_type_key();
     inline static size_t event_type_key_counter = 0;
 
-    template<typename F>
-    void internal_add_handler(size_t id, F&& f);
+    template<typename F> void internal_add_handler(size_t id, F&& f);
 
     template<class C, typename F>
     void internal_bind_handler(size_t id, C* c, F&& f);
@@ -767,6 +743,7 @@ private:
         // functions, which have been made unnecessarily unusable in C++.
         std::function<void(scene& ctx, const void* event)> callback;
     };
+
     std::vector<std::vector<event_handler>> event_handlers;
 };
 
@@ -774,26 +751,26 @@ private:
  * The other components are added to the entity along with this one if they
  * are not yet present.
  */
-template<typename... DependencyComponents>
-class dependency_components
+template<typename... DependencyComponents> class dependency_components
 {
-friend class scene;
+    friend class scene;
+
 public:
     static void ensure_dependency_components_exist(entity id, scene& ctx);
 };
-
 
 //==============================================================================
 // Implementation
 //==============================================================================
 
-event_subscription::event_subscription(scene* ctx, std::size_t subscription_id)
-: ctx(ctx), subscription_id(subscription_id)
-{
-}
+event_subscription::event_subscription(scene* ctx, std::size_t subscription_id):
+    ctx(ctx),
+    subscription_id(subscription_id)
+{}
 
-event_subscription::event_subscription(event_subscription&& other)
-: ctx(other.ctx), subscription_id(other.subscription_id)
+event_subscription::event_subscription(event_subscription&& other):
+    ctx(other.ctx),
+    subscription_id(other.subscription_id)
 {
     other.ctx = nullptr;
 }
@@ -807,57 +784,67 @@ event_subscription::~event_subscription()
 template<typename T>
 constexpr bool search_index_is_empty_default(
     int,
-    typename T::empty_default_impl const * = nullptr
-){ return true; }
-
-template<typename T>
-constexpr bool search_index_is_empty_default(long)
-{ return false; }
-
-template<typename T>
-constexpr bool search_index_is_empty_default()
- { return search_index_is_empty_default<T>(0); }
-
-template<typename Component>
-void search_index<Component>::add_entity(entity, const Component&) {}
-
-template<typename Component>
-void search_index<Component>::update(scene&) {}
-
-template<typename Component>
-void search_index<Component>::remove_entity(entity, const Component&) {}
-
-template<typename T>
-component_container<T>::component_container(scene& ctx)
-:   entity_count(0), bucket_count(0),
-    bucket_bitmask(nullptr), top_bitmask(nullptr),
-    bucket_jump_table(nullptr), bucket_components(nullptr), batching(false),
-    batch_checklist_size(0), batch_checklist_capacity(0),
-    batch_checklist(nullptr), bucket_batch_bitmask(nullptr), ctx(&ctx)
+    typename const T::empty_default_impl* = nullptr
+)
 {
+    return true;
 }
 
+template<typename T> constexpr bool search_index_is_empty_default(long)
+{
+    return false;
+}
+
+template<typename T> constexpr bool search_index_is_empty_default()
+{
+    return search_index_is_empty_default<T>(0);
+}
+
+template<typename Component>
+void search_index<Component>::add_entity(entity, const Component&)
+{}
+
+template<typename Component> void search_index<Component>::update(scene&)
+{}
+
+template<typename Component>
+void search_index<Component>::remove_entity(entity, const Component&)
+{}
+
 template<typename T>
-component_container<T>::~component_container()
+component_container<T>::component_container(scene& ctx):
+    entity_count(0),
+    bucket_count(0),
+    bucket_bitmask(nullptr),
+    top_bitmask(nullptr),
+    bucket_jump_table(nullptr),
+    bucket_components(nullptr),
+    batching(false),
+    batch_checklist_size(0),
+    batch_checklist_capacity(0),
+    batch_checklist(nullptr),
+    bucket_batch_bitmask(nullptr),
+    ctx(&ctx)
+{}
+
+template<typename T> component_container<T>::~component_container()
 {
     destroy();
 }
 
-template<typename T>
-T* component_container<T>::operator[](entity e)
+template<typename T> T* component_container<T>::operator[](entity e)
 {
-    if(!contains(e)) return nullptr;
+    if(!contains(e))
+        return nullptr;
     return get_unsafe(e);
 }
 
-template<typename T>
-const T* component_container<T>::operator[](entity e) const
+template<typename T> const T* component_container<T>::operator[](entity e) const
 {
     return const_cast<component_container<T>*>(this)->operator[](e);
 }
 
-template<typename T>
-void component_container<T>::insert(entity id, T&& value)
+template<typename T> void component_container<T>::insert(entity id, T&& value)
 {
     emplace(id, std::move(value));
 }
@@ -896,8 +883,7 @@ void component_container<T>::emplace(entity id, Args&&... args)
     }
 }
 
-template<typename T>
-void component_container<T>::erase(entity id)
+template<typename T> void component_container<T>::erase(entity id)
 {
     if(!contains(id))
         return;
@@ -912,7 +898,8 @@ void component_container<T>::erase(entity id)
             // just destroy it here.
             bucket_erase(id, true);
         }
-        else signal_remove(id, get_unsafe(id));
+        else
+            signal_remove(id, get_unsafe(id));
     }
     else
     {
@@ -927,8 +914,7 @@ void component_container<T>::erase(entity id)
     }
 }
 
-template<typename T>
-void component_container<T>::clear()
+template<typename T> void component_container<T>::clear()
 {
     if(batching)
     { // Uh oh, this is super suboptimal :/ pls don't clear while iterating.
@@ -941,14 +927,12 @@ void component_container<T>::clear()
     {
         // Clear top bitmask
         std::uint32_t top_bitmask_count = get_top_bitmask_size();
-        for(std::uint32_t i = 0; i< top_bitmask_count; ++i)
-            top_bitmask[i] = 0;
+        for(std::uint32_t i = 0; i < top_bitmask_count; ++i) top_bitmask[i] = 0;
 
         // Destroy all existing objects
-        if(
-            ctx->get_handler_count<remove_component<T>>() ||
-            !search_index_is_empty_default<decltype(search)>()
-        ){
+        if(ctx->get_handler_count<remove_component<T>>() ||
+           !search_index_is_empty_default<decltype(search)>())
+        {
             for(auto it = begin(); it != end(); ++it)
             {
                 auto pair = *it;
@@ -958,8 +942,7 @@ void component_container<T>::clear()
         }
         else
         {
-            for(auto it = begin(); it != end(); ++it)
-                (*it).second->~T();
+            for(auto it = begin(); it != end(); ++it) (*it).second->~T();
         }
 
         // Release all bucket pointers
@@ -967,24 +950,25 @@ void component_container<T>::clear()
         {
             if(bucket_bitmask[i])
             {
-                delete [] bucket_bitmask[i];
+                delete[] bucket_bitmask[i];
                 bucket_bitmask[i] = nullptr;
             }
             if(bucket_batch_bitmask[i])
             {
-                delete [] bucket_batch_bitmask[i];
+                delete[] bucket_batch_bitmask[i];
                 bucket_batch_bitmask[i] = nullptr;
             }
             if(bucket_jump_table[i])
             {
-                delete [] bucket_jump_table[i];
+                delete[] bucket_jump_table[i];
                 bucket_jump_table[i] = nullptr;
             }
             if constexpr(!tag_component)
             {
                 if(bucket_components[i])
                 {
-                    delete [] reinterpret_cast<t_mimicker*>(bucket_components[i]);
+                    delete[] reinterpret_cast<t_mimicker*>(bucket_components[i]
+                    );
                     bucket_components[i] = nullptr;
                 }
             }
@@ -993,55 +977,56 @@ void component_container<T>::clear()
     entity_count = 0;
 }
 
-template<typename T>
-bool component_container<T>::contains(entity id) const
+template<typename T> bool component_container<T>::contains(entity id) const
 {
     entity hi = id >> bucket_exp;
-    if(id == INVALID_ENTITY || hi >= bucket_count) return false;
+    if(id == INVALID_ENTITY || hi >= bucket_count)
+        return false;
     entity lo = id & bucket_mask;
     if(batching)
     {
-        bitmask_type bitmask = bucket_bitmask[hi] ?
-            bucket_bitmask[hi][lo>>bitmask_shift] : 0;
+        bitmask_type bitmask =
+            bucket_bitmask[hi] ? bucket_bitmask[hi][lo >> bitmask_shift] : 0;
         if(bucket_batch_bitmask[hi])
-            bitmask ^= bucket_batch_bitmask[hi][lo>>bitmask_shift];
-        return (bitmask >> (lo&bitmask_mask))&1;
+            bitmask ^= bucket_batch_bitmask[hi][lo >> bitmask_shift];
+        return (bitmask >> (lo & bitmask_mask)) & 1;
     }
     else
     {
         bitmask_type* bitmask = bucket_bitmask[hi];
-        if(!bitmask) return false;
-        return (bitmask[lo>>bitmask_shift] >> (lo&bitmask_mask))&1;
+        if(!bitmask)
+            return false;
+        return (bitmask[lo >> bitmask_shift] >> (lo & bitmask_mask)) & 1;
     }
 }
 
-template<typename T>
-void component_container<T>::start_batch()
+template<typename T> void component_container<T>::start_batch()
 {
     batching = true;
     batch_checklist_size = 0;
 }
 
-template<typename T>
-void component_container<T>::finish_batch()
+template<typename T> void component_container<T>::finish_batch()
 {
-    if(!batching) return;
+    if(!batching)
+        return;
     batching = false;
 
     // Discard duplicate changes first.
     for(std::uint32_t i = 0; i < batch_checklist_size; ++i)
     {
-        std::uint32_t ri = batch_checklist_size-1-i;
+        std::uint32_t ri = batch_checklist_size - 1 - i;
         entity& id = batch_checklist[ri];
         entity hi = id >> bucket_exp;
         entity lo = id & bucket_mask;
-        bitmask_type bit = 1lu<<(lo&bitmask_mask);
+        bitmask_type bit = std::uint64_t(1) << (lo & bitmask_mask);
         bitmask_type* bbit = bucket_batch_bitmask[hi];
-        if(bbit && (bbit[lo>>bitmask_shift] & bit))
+        if(bbit && (bbit[lo >> bitmask_shift] & bit))
         { // Not a dupe, but latest state.
-            bbit[lo>>bitmask_shift] ^= bit;
+            bbit[lo >> bitmask_shift] ^= bit;
         }
-        else id = INVALID_ENTITY;
+        else
+            id = INVALID_ENTITY;
     }
 
     // Now, do all changes for realzies. All IDs that are left are unique and
@@ -1049,12 +1034,14 @@ void component_container<T>::finish_batch()
     for(std::uint32_t i = 0; i < batch_checklist_size; ++i)
     {
         entity& id = batch_checklist[i];
-        if(id == INVALID_ENTITY) continue;
+        if(id == INVALID_ENTITY)
+            continue;
 
         entity hi = id >> bucket_exp;
         entity lo = id & bucket_mask;
-        bitmask_type bit = 1lu<<(lo&bitmask_mask);
-        if(bucket_bitmask[hi] && (bucket_bitmask[hi][lo>>bitmask_shift] & bit))
+        bitmask_type bit = std::uint64_t(1) << (lo & bitmask_mask);
+        if(bucket_bitmask[hi] &&
+           (bucket_bitmask[hi][lo >> bitmask_shift] & bit))
         { // Erase
             bitmask_erase(id);
             jump_table_erase(id);
@@ -1073,14 +1060,15 @@ void component_container<T>::finish_batch()
     for(std::uint32_t i = 0; i < batch_checklist_size; ++i)
     {
         entity& id = batch_checklist[i];
-        if(id == INVALID_ENTITY) continue;
+        if(id == INVALID_ENTITY)
+            continue;
 
         entity hi = id >> bucket_exp;
         if(bucket_bitmask[hi] == nullptr) // Already erased!
             continue;
 
         entity lo = id & bucket_mask;
-        if(bucket_bitmask[hi][lo>>bitmask_shift] == 0 && bitmask_empty(hi))
+        if(bucket_bitmask[hi][lo >> bitmask_shift] == 0 && bitmask_empty(hi))
         { // This got erased, so check if the whole bucket is empty.
             bucket_self_erase(hi);
             try_jump_table_bucket_erase(id >> bucket_exp);
@@ -1091,7 +1079,8 @@ void component_container<T>::finish_batch()
 template<typename T>
 typename component_container<T>::iterator component_container<T>::begin()
 {
-    if(entity_count == 0) return end();
+    if(entity_count == 0)
+        return end();
     // The jump entry for INVALID_ENTITY stores the first valid entity index.
     // INVALID_ENTITY is always present, but doesn't cause allocation of a
     // component for itself.
@@ -1104,14 +1093,12 @@ typename component_container<T>::iterator component_container<T>::end()
     return iterator(*this, INVALID_ENTITY);
 }
 
-template<typename T>
-std::size_t component_container<T>::size() const
+template<typename T> std::size_t component_container<T>::size() const
 {
     return entity_count;
 }
 
-template<typename T>
-void component_container<T>::update_search_index()
+template<typename T> void component_container<T>::update_search_index()
 {
     search.update(*ctx);
 }
@@ -1119,7 +1106,8 @@ void component_container<T>::update_search_index()
 template<typename T>
 void component_container<T>::list_entities(
     std::map<entity, entity>& translation_table
-){
+)
+{
     for(auto it = begin(); it; ++it)
         translation_table[(*it).first] = INVALID_ENTITY;
 }
@@ -1128,7 +1116,8 @@ template<typename T>
 void component_container<T>::concat(
     scene& target,
     const std::map<entity, entity>& translation_table
-){
+)
+{
     if constexpr(std::is_copy_constructible_v<T>)
     {
         for(auto it = begin(); it; ++it)
@@ -1144,11 +1133,13 @@ void component_container<T>::copy(
     scene& target,
     entity result_id,
     entity original_id
-){
+)
+{
     if constexpr(std::is_copy_constructible_v<T>)
     {
         T* comp = operator[](original_id);
-        if(comp) target.emplace<T>(result_id, *comp);
+        if(comp)
+            target.emplace<T>(result_id, *comp);
     }
 }
 
@@ -1159,8 +1150,7 @@ entity component_container<T>::find_entity(Args&&... args) const
     return search.find(std::forward<Args>(args)...);
 }
 
-template<typename T>
-T* component_container<T>::get_unsafe(entity e)
+template<typename T> T* component_container<T>::get_unsafe(entity e)
 {
     if constexpr(tag_component)
     {
@@ -1168,11 +1158,11 @@ T* component_container<T>::get_unsafe(entity e)
         // As long as it's not nullptr, that is.
         return reinterpret_cast<T*>(&bucket_components);
     }
-    else return &bucket_components[e>>bucket_exp][e&bucket_mask];
+    else
+        return &bucket_components[e >> bucket_exp][e & bucket_mask];
 }
 
-template<typename T>
-void component_container<T>::destroy()
+template<typename T> void component_container<T>::destroy()
 {
     // Cannot batch while destroying.
     if(batching)
@@ -1221,8 +1211,7 @@ void component_container<T>::destroy()
         delete[] bucket_batch_bitmask;
 }
 
-template<typename T>
-void component_container<T>::jump_table_insert(entity id)
+template<typename T> void component_container<T>::jump_table_insert(entity id)
 {
     // Assumes that the corresponding bitmask change has already been made.
     std::uint32_t cur_hi = id >> bucket_exp;
@@ -1238,7 +1227,7 @@ void component_container<T>::jump_table_insert(entity id)
 
     if(prev_start_id + 1 < id)
     { // Make preceding block's end point back to its start
-        entity prev_end_id = id-1;
+        entity prev_end_id = id - 1;
         std::uint32_t prev_end_hi = prev_end_id >> bucket_exp;
         std::uint32_t prev_end_lo = prev_end_id & bucket_mask;
         ensure_jump_table(prev_end_hi);
@@ -1248,7 +1237,7 @@ void component_container<T>::jump_table_insert(entity id)
 
     if(id + 1 < prev_start)
     { // Make succeeding block's end point back to its start
-        entity next_end_id = prev_start-1;
+        entity next_end_id = prev_start - 1;
         std::uint32_t next_end_hi = next_end_id >> bucket_exp;
         std::uint32_t next_end_lo = next_end_id & bucket_mask;
         entity& next_end = bucket_jump_table[next_end_hi][next_end_lo];
@@ -1259,12 +1248,11 @@ void component_container<T>::jump_table_insert(entity id)
     prev_start = id;
 }
 
-template<typename T>
-void component_container<T>::jump_table_erase(entity id)
+template<typename T> void component_container<T>::jump_table_erase(entity id)
 {
     std::uint32_t hi = id >> bucket_exp;
     std::uint32_t lo = id & bucket_mask;
-    entity prev = id-1;
+    entity prev = id - 1;
     std::uint32_t prev_hi = prev >> bucket_exp;
     std::uint32_t prev_lo = prev & bucket_mask;
 
@@ -1290,7 +1278,7 @@ void component_container<T>::jump_table_erase(entity id)
     // Ensure the skip block end knows to jump back as well.
     if(cur_jmp != 0)
     {
-        entity block_end = cur_jmp-1;
+        entity block_end = cur_jmp - 1;
         prev_hi = block_end >> bucket_exp;
         prev_lo = block_end & bucket_mask;
         bucket_jump_table[prev_hi][prev_lo] = block_start;
@@ -1300,7 +1288,9 @@ void component_container<T>::jump_table_erase(entity id)
 template<typename T>
 std::size_t component_container<T>::get_top_bitmask_size() const
 {
-    return bucket_count == 0 ? 0 : std::max(initial_bucket_count, bucket_count >> bitmask_shift);
+    return bucket_count == 0
+        ? 0
+        : std::max(initial_bucket_count, bucket_count >> bitmask_shift);
 }
 
 template<typename T>
@@ -1316,27 +1306,28 @@ bool component_container<T>::bitmask_empty(std::uint32_t bucket_index) const
     return true;
 }
 
-template<typename T>
-void component_container<T>::bitmask_insert(entity id)
+template<typename T> void component_container<T>::bitmask_insert(entity id)
 {
     std::uint32_t hi = id >> bucket_exp;
     std::uint32_t lo = id & bucket_mask;
     ensure_bitmask(hi);
-    bitmask_type& mask = bucket_bitmask[hi][lo>>bitmask_shift];
+    bitmask_type& mask = bucket_bitmask[hi][lo >> bitmask_shift];
     if(mask == 0)
-        top_bitmask[hi>>bitmask_shift] |= 1lu<<(hi&bitmask_mask);
-    mask |= 1lu<<(lo&bitmask_mask);
+        top_bitmask[hi >> bitmask_shift] |= std::uint64_t(1)
+            << (hi & bitmask_mask);
+    mask |= std::uint64_t(1) << (lo & bitmask_mask);
 }
 
-template<typename T>
-bool component_container<T>::bitmask_erase(entity id)
+template<typename T> bool component_container<T>::bitmask_erase(entity id)
 {
     std::uint32_t hi = id >> bucket_exp;
     std::uint32_t lo = id & bucket_mask;
-    bucket_bitmask[hi][lo>>bitmask_shift] &= ~(1lu<<(lo&bitmask_mask));
-    if(bucket_bitmask[hi][lo>>bitmask_shift] == 0 && bitmask_empty(hi))
+    bucket_bitmask[hi][lo >> bitmask_shift] &=
+        ~(std::uint64_t(1) << (lo & bitmask_mask));
+    if(bucket_bitmask[hi][lo >> bitmask_shift] == 0 && bitmask_empty(hi))
     {
-        top_bitmask[hi>>bitmask_shift] &= ~(1lu<<(hi&bitmask_mask));
+        top_bitmask[hi >> bitmask_shift] &=
+            ~(std::uint64_t(1) << (hi & bitmask_mask));
         return true;
     }
     return false;
@@ -1352,7 +1343,7 @@ void component_container<T>::bucket_insert(entity id, Args&&... args)
     if constexpr(tag_component)
     {
         data = reinterpret_cast<T*>(&bucket_components);
-        new (&bucket_components) T(std::forward<Args>(args)...);
+        new(&bucket_components) T(std::forward<Args>(args)...);
     }
     else
     {
@@ -1362,14 +1353,13 @@ void component_container<T>::bucket_insert(entity id, Args&&... args)
         // If this component container doesn't exist yet, create it.
         if(bucket_components[hi] == nullptr)
         {
-            bucket_components[hi] = reinterpret_cast<T*>(
-                new t_mimicker[1u<<bucket_exp]
-            );
+            bucket_components[hi] =
+                reinterpret_cast<T*>(new t_mimicker[1u << bucket_exp]);
         }
         data = &bucket_components[hi][lo];
     }
     // Create the related component here.
-    new (data) T(std::forward<Args>(args)...);
+    new(data) T(std::forward<Args>(args)...);
     signal_add(id, data);
 }
 
@@ -1388,7 +1378,8 @@ void component_container<T>::bucket_erase(entity id, bool signal)
         std::uint32_t lo = id & bucket_mask;
         data = &bucket_components[hi][lo];
     }
-    if(signal) signal_remove(id, data);
+    if(signal)
+        signal_remove(id, data);
     data->~T();
 }
 
@@ -1426,7 +1417,7 @@ void component_container<T>::try_jump_table_bucket_erase(std::uint32_t i)
         return;
 
     // We can be removed if the succeeding bucket is also empty.
-    if(i+1 >= bucket_count || bucket_bitmask[i+1] == nullptr)
+    if(i + 1 >= bucket_count || bucket_bitmask[i + 1] == nullptr)
     {
         delete[] bucket_jump_table[i];
         bucket_jump_table[i] = nullptr;
@@ -1434,71 +1425,93 @@ void component_container<T>::try_jump_table_bucket_erase(std::uint32_t i)
 #endif
 }
 
-template<typename T>
-void component_container<T>::ensure_bucket_space(entity id)
+template<typename T> void component_container<T>::ensure_bucket_space(entity id)
 {
-    if((id>>bucket_exp) < bucket_count)
+    if((id >> bucket_exp) < bucket_count)
         return;
 
-    std::uint32_t new_bucket_count = std::max(initial_bucket_count, bucket_count);
-    while(new_bucket_count <= (id>>bucket_exp))
-        new_bucket_count *= 2;
+    std::uint32_t new_bucket_count =
+        std::max(initial_bucket_count, bucket_count);
+    while(new_bucket_count <= (id >> bucket_exp)) new_bucket_count *= 2;
 
-    bitmask_type** new_bucket_batch_bitmask = new bitmask_type*[new_bucket_count];
-    memcpy(new_bucket_batch_bitmask, bucket_batch_bitmask,
-        sizeof(bitmask_type*)*bucket_count);
-    memset(new_bucket_batch_bitmask+bucket_count, 0,
-        sizeof(bitmask_type*)*(new_bucket_count-bucket_count));
-    delete [] bucket_batch_bitmask;
+    bitmask_type** new_bucket_batch_bitmask =
+        new bitmask_type*[new_bucket_count];
+    memcpy(
+        new_bucket_batch_bitmask,
+        bucket_batch_bitmask,
+        sizeof(bitmask_type*) * bucket_count
+    );
+    memset(
+        new_bucket_batch_bitmask + bucket_count,
+        0,
+        sizeof(bitmask_type*) * (new_bucket_count - bucket_count)
+    );
+    delete[] bucket_batch_bitmask;
     bucket_batch_bitmask = new_bucket_batch_bitmask;
 
     bitmask_type** new_bucket_bitmask = new bitmask_type*[new_bucket_count];
-    memcpy(new_bucket_bitmask, bucket_bitmask,
-        sizeof(bitmask_type*)*bucket_count);
-    memset(new_bucket_bitmask+bucket_count, 0,
-        sizeof(bitmask_type*)*(new_bucket_count-bucket_count));
-    delete [] bucket_bitmask;
+    memcpy(
+        new_bucket_bitmask, bucket_bitmask, sizeof(bitmask_type*) * bucket_count
+    );
+    memset(
+        new_bucket_bitmask + bucket_count,
+        0,
+        sizeof(bitmask_type*) * (new_bucket_count - bucket_count)
+    );
+    delete[] bucket_bitmask;
     bucket_bitmask = new_bucket_bitmask;
 
     entity** new_bucket_jump_table = new entity*[new_bucket_count];
-    memcpy(new_bucket_jump_table, bucket_jump_table,
-        sizeof(entity*)*bucket_count);
-    memset(new_bucket_jump_table+bucket_count, 0,
-        sizeof(entity*)*(new_bucket_count-bucket_count));
-    delete [] bucket_jump_table;
+    memcpy(
+        new_bucket_jump_table, bucket_jump_table, sizeof(entity*) * bucket_count
+    );
+    memset(
+        new_bucket_jump_table + bucket_count,
+        0,
+        sizeof(entity*) * (new_bucket_count - bucket_count)
+    );
+    delete[] bucket_jump_table;
     bucket_jump_table = new_bucket_jump_table;
 
     // Create initial jump table entry.
     if(bucket_count == 0)
     {
         bucket_jump_table[0] = new entity[1 << bucket_exp];
-        memset(bucket_jump_table[0], 0, sizeof(entity)*(1 << bucket_exp));
+        memset(bucket_jump_table[0], 0, sizeof(entity) * (1 << bucket_exp));
     }
 
     if constexpr(!tag_component)
     {
         T** new_bucket_components = new T*[new_bucket_count];
-        memcpy(new_bucket_components, bucket_components,
-            sizeof(T*)*bucket_count);
-        memset(new_bucket_components+bucket_count, 0,
-            sizeof(T*)*(new_bucket_count-bucket_count));
-        delete [] bucket_components;
+        memcpy(
+            new_bucket_components, bucket_components, sizeof(T*) * bucket_count
+        );
+        memset(
+            new_bucket_components + bucket_count,
+            0,
+            sizeof(T*) * (new_bucket_count - bucket_count)
+        );
+        delete[] bucket_components;
         bucket_components = new_bucket_components;
     }
 
     std::uint32_t top_bitmask_count = get_top_bitmask_size();
-    std::uint32_t new_top_bitmask_count = std::max(
-        initial_bucket_count,
-        new_bucket_count >> bitmask_shift
-    );
+    std::uint32_t new_top_bitmask_count =
+        std::max(initial_bucket_count, new_bucket_count >> bitmask_shift);
     if(top_bitmask_count != new_top_bitmask_count)
     {
         bitmask_type* new_top_bitmask = new bitmask_type[new_top_bitmask_count];
-        memcpy(new_top_bitmask, top_bitmask,
-            sizeof(bitmask_type)*top_bitmask_count);
-        memset(new_top_bitmask+top_bitmask_count, 0,
-            sizeof(bitmask_type)*(new_top_bitmask_count-top_bitmask_count));
-        delete [] top_bitmask;
+        memcpy(
+            new_top_bitmask,
+            top_bitmask,
+            sizeof(bitmask_type) * top_bitmask_count
+        );
+        memset(
+            new_top_bitmask + top_bitmask_count,
+            0,
+            sizeof(bitmask_type) * (new_top_bitmask_count - top_bitmask_count)
+        );
+        delete[] top_bitmask;
         top_bitmask = new_top_bitmask;
     }
 
@@ -1512,8 +1525,9 @@ void component_container<T>::ensure_bitmask(std::uint32_t bucket_index)
     {
         bucket_bitmask[bucket_index] = new bitmask_type[bucket_bitmask_units];
         std::memset(
-            bucket_bitmask[bucket_index], 0,
-            sizeof(bitmask_type)*bucket_bitmask_units
+            bucket_bitmask[bucket_index],
+            0,
+            sizeof(bitmask_type) * bucket_bitmask_units
         );
     }
 }
@@ -1524,12 +1538,15 @@ void component_container<T>::ensure_jump_table(std::uint32_t bucket_index)
     if(!bucket_jump_table[bucket_index])
     {
         bucket_jump_table[bucket_index] = new entity[1 << bucket_exp];
-        memset(bucket_jump_table[bucket_index], 0, sizeof(entity)*(1 << bucket_exp));
+        memset(
+            bucket_jump_table[bucket_index],
+            0,
+            sizeof(entity) * (1 << bucket_exp)
+        );
     }
 }
 
-template<typename T>
-bool component_container<T>::batch_change(entity id)
+template<typename T> bool component_container<T>::batch_change(entity id)
 {
     std::uint32_t hi = id >> bucket_exp;
     std::uint32_t lo = id & bucket_mask;
@@ -1537,27 +1554,34 @@ bool component_container<T>::batch_change(entity id)
     {
         bucket_batch_bitmask[hi] = new bitmask_type[bucket_bitmask_units];
         std::memset(
-            bucket_batch_bitmask[hi], 0,
-            sizeof(bitmask_type)*bucket_bitmask_units
+            bucket_batch_bitmask[hi],
+            0,
+            sizeof(bitmask_type) * bucket_bitmask_units
         );
     }
-    bitmask_type& mask = bucket_batch_bitmask[hi][lo>>bitmask_shift];
-    bitmask_type bit = 1lu<<(lo&bitmask_mask);
+    bitmask_type& mask = bucket_batch_bitmask[hi][lo >> bitmask_shift];
+    bitmask_type bit = std::uint64_t(1) << (lo & bitmask_mask);
     mask ^= bit;
     if(mask & bit)
     { // If there will be a change, add this to the list.
         if(batch_checklist_size == batch_checklist_capacity)
         {
-            std::uint32_t new_batch_checklist_capacity = std::max(
-                initial_bucket_count,
-                batch_checklist_capacity * 2
+            std::uint32_t new_batch_checklist_capacity =
+                std::max(initial_bucket_count, batch_checklist_capacity * 2);
+            entity* new_batch_checklist =
+                new entity[new_batch_checklist_capacity];
+            memcpy(
+                new_batch_checklist,
+                batch_checklist,
+                sizeof(entity) * batch_checklist_capacity
             );
-            entity* new_batch_checklist = new entity[new_batch_checklist_capacity];
-            memcpy(new_batch_checklist, batch_checklist,
-                sizeof(entity)*batch_checklist_capacity);
-            memset(new_batch_checklist + batch_checklist_capacity, 0,
-                sizeof(entity)*(new_batch_checklist_capacity-batch_checklist_capacity));
-            delete [] batch_checklist;
+            memset(
+                new_batch_checklist + batch_checklist_capacity,
+                0,
+                sizeof(entity) *
+                    (new_batch_checklist_capacity - batch_checklist_capacity)
+            );
+            delete[] batch_checklist;
             batch_checklist = new_batch_checklist;
             batch_checklist_capacity = new_batch_checklist_capacity;
         }
@@ -1586,16 +1610,12 @@ entity component_container<T>::find_previous_entity(entity id)
 
     // Now, find the highest bit in the bucket that was found.
     find_bitmask_top(
-        bucket_bitmask[bucket_index],
-        bucket_bitmask_units,
-        prev_index
+        bucket_bitmask[bucket_index], bucket_bitmask_units, prev_index
     );
     return (bucket_index << bucket_exp) + prev_index;
 }
 
-
-template<typename T>
-void component_container<T>::signal_add(entity id, T* data)
+template<typename T> void component_container<T>::signal_add(entity id, T* data)
 {
     search.add_entity(id, *data);
     ctx->emit(add_component<T>{id, data});
@@ -1641,8 +1661,9 @@ bool component_container<T>::find_bitmask_top(
     bitmask_type* bitmask,
     std::uint32_t count,
     std::uint32_t& top_index
-){
-    for(std::uint32_t j = 0, i = count-1; j < count; ++j, --i)
+)
+{
+    for(std::uint32_t j = 0, i = count - 1; j < count; ++j, --i)
     {
         if(bitmask[i] != 0)
         {
@@ -1660,12 +1681,13 @@ bool component_container<T>::find_bitmask_previous_index(
     bitmask_type* bitmask,
     std::uint32_t index,
     std::uint32_t& prev_index
-){
+)
+{
     if(!bitmask)
         return false;
 
     std::uint32_t bm_index = index >> bitmask_shift;
-    bitmask_type bm_mask = (1lu<<(index&bitmask_mask))-1;
+    bitmask_type bm_mask = (std::uint64_t(1) << (index & bitmask_mask)) - 1;
     bitmask_type cur_mask = bitmask[bm_index] & bm_mask;
     if(cur_mask != 0)
     {
@@ -1678,8 +1700,10 @@ bool component_container<T>::find_bitmask_previous_index(
 }
 
 template<typename T>
-component_container<T>::iterator::iterator(component_container& from, entity e)
-:   from(&from), current_entity(e), current_bucket(e>>bucket_exp)
+component_container<T>::iterator::iterator(component_container& from, entity e):
+    from(&from),
+    current_entity(e),
+    current_bucket(e >> bucket_exp)
 {
     if(current_bucket < from.bucket_count)
     {
@@ -1693,7 +1717,7 @@ component_container<T>::iterator::iterator(component_container& from, entity e)
 
 void component_container_entity_advancer::advance()
 {
-    current_entity = current_jump_table[current_entity&bucket_mask];
+    current_entity = current_jump_table[current_entity & bucket_mask];
     std::uint32_t next_bucket = current_entity >> bucket_exp;
     if(next_bucket != current_bucket)
     {
@@ -1703,9 +1727,10 @@ void component_container_entity_advancer::advance()
 }
 
 template<typename T>
-typename component_container<T>::iterator& component_container<T>::iterator::operator++()
+typename component_container<T>::iterator&
+component_container<T>::iterator::operator++()
 {
-    current_entity = current_jump_table[current_entity&bucket_mask];
+    current_entity = current_jump_table[current_entity & bucket_mask];
     std::uint32_t next_bucket = current_entity >> bucket_exp;
     if(next_bucket != current_bucket)
     {
@@ -1720,7 +1745,8 @@ typename component_container<T>::iterator& component_container<T>::iterator::ope
 }
 
 template<typename T>
-typename component_container<T>::iterator component_container<T>::iterator::operator++(int)
+typename component_container<T>::iterator
+component_container<T>::iterator::operator++(int)
 {
     iterator it(*this);
     ++it;
@@ -1732,17 +1758,12 @@ std::pair<entity, T*> component_container<T>::iterator::operator*()
 {
     if constexpr(tag_component)
     {
-        return {
-            current_entity,
-            reinterpret_cast<T*>(&from->bucket_components)
-        };
+        return {current_entity, reinterpret_cast<T*>(&from->bucket_components)};
     }
     else
     {
         return {
-            current_entity,
-            &current_components[current_entity&bucket_mask]
-        };
+            current_entity, &current_components[current_entity & bucket_mask]};
     }
 }
 
@@ -1753,15 +1774,12 @@ std::pair<entity, const T*> component_container<T>::iterator::operator*() const
     {
         return {
             current_entity,
-            reinterpret_cast<const T*>(&from->bucket_components)
-        };
+            reinterpret_cast<const T*>(&from->bucket_components)};
     }
     else
     {
         return {
-            current_entity,
-            &current_components[current_entity&bucket_mask]
-        };
+            current_entity, &current_components[current_entity & bucket_mask]};
     }
 }
 
@@ -1785,12 +1803,11 @@ bool component_container<T>::iterator::try_advance(entity id)
 
     std::uint32_t next_bucket = id >> bucket_exp;
     std::uint32_t lo = id & bucket_mask;
-    if(
-        id < current_entity ||
-        next_bucket >= from->bucket_count ||
-        !from->bucket_bitmask[next_bucket] ||
-        !(from->bucket_bitmask[next_bucket][lo>>bitmask_shift] & (1lu << (lo&bitmask_mask)))
-    ) return false;
+    if(id < current_entity || next_bucket >= from->bucket_count ||
+       !from->bucket_bitmask[next_bucket] ||
+       !(from->bucket_bitmask[next_bucket][lo >> bitmask_shift] &
+         (std::uint64_t(1) << (lo & bitmask_mask))))
+        return false;
 
     current_entity = id;
     if(next_bucket != current_bucket)
@@ -1803,14 +1820,12 @@ bool component_container<T>::iterator::try_advance(entity id)
     return true;
 }
 
-template<typename T>
-component_container<T>::iterator::operator bool() const
+template<typename T> component_container<T>::iterator::operator bool() const
 {
     return current_entity != INVALID_ENTITY;
 }
 
-template<typename T>
-entity component_container<T>::iterator::get_id() const
+template<typename T> entity component_container<T>::iterator::get_id() const
 {
     return current_entity;
 }
@@ -1822,7 +1837,8 @@ component_container<T>* component_container<T>::iterator::get_container() const
 }
 
 template<typename T>
-component_container_entity_advancer component_container<T>::iterator::get_advancer()
+component_container_entity_advancer
+component_container<T>::iterator::get_advancer()
 {
     return component_container_entity_advancer{
         bucket_mask,
@@ -1830,22 +1846,17 @@ component_container_entity_advancer component_container<T>::iterator::get_advanc
         &from->bucket_jump_table,
         current_bucket,
         current_entity,
-        current_jump_table
-    };
+        current_jump_table};
 }
 
 #ifdef MONKERO_CONTAINER_DEBUG_UTILS
-template<typename T>
-bool component_container<T>::test_invariant() const
+template<typename T> bool component_container<T>::test_invariant() const
 {
     // Check bitmask internal validity
     std::uint32_t top_bitmask_count = get_top_bitmask_size();
     std::uint32_t top_index = 0;
-    bool found = top_bitmask && find_bitmask_top(
-        top_bitmask,
-        top_bitmask_count,
-        top_index
-    );
+    bool found = top_bitmask &&
+        find_bitmask_top(top_bitmask, top_bitmask_count, top_index);
     std::uint32_t bitmask_entity_count = 0;
     if(found && top_index >= bucket_count && !batching)
     {
@@ -1855,39 +1866,43 @@ bool component_container<T>::test_invariant() const
 
     for(std::uint32_t i = 0; i < bucket_count; ++i)
     {
-        int present = (top_bitmask[i>>bitmask_shift] >> (i&bitmask_mask))&1;
+        int present =
+            (top_bitmask[i >> bitmask_shift] >> (i & bitmask_mask)) & 1;
         if(present && !bucket_bitmask[i] && !batching)
         {
             std::cout << "Bitmask bucket that should exist is null instead!\n";
             return false;
         }
-        bool found = bucket_bitmask[i] && find_bitmask_top(
-            bucket_bitmask[i],
-            bucket_bitmask_units,
-            top_index
-        );
+        bool found = bucket_bitmask[i] &&
+            find_bitmask_top(
+                         bucket_bitmask[i], bucket_bitmask_units, top_index
+            );
         if(present && !found && !batching)
         {
-            std::cout << "Empty bitmask bucket marked as existing in the top-level!\n";
+            std::cout << "Empty bitmask bucket marked as existing in the "
+                         "top-level!\n";
             return false;
         }
         else if(!present && found && !batching)
         {
-            std::cout << "Non-empty bitmask bucket marked as nonexistent in the top-level!\n";
+            std::cout << "Non-empty bitmask bucket marked as nonexistent in "
+                         "the top-level!\n";
             return false;
         }
         if(bucket_bitmask[i])
         {
             for(std::uint32_t j = 0; j < bucket_bitmask_units; ++j)
             {
-                bitmask_entity_count += __builtin_popcountll(bucket_bitmask[i][j]);
+                bitmask_entity_count +=
+                    __builtin_popcountll(bucket_bitmask[i][j]);
             }
         }
     }
 
     if(!batching && bitmask_entity_count != entity_count)
     {
-        std::cout << "Number of entities in bitmask does not match tracked number!\n";
+        std::cout
+            << "Number of entities in bitmask does not match tracked number!\n";
         return false;
     }
 
@@ -1899,12 +1914,12 @@ bool component_container<T>::test_invariant() const
         entity id = bucket_jump_table[0][0];
         while(id != 0)
         {
-            bitmask_type* bm = bucket_bitmask[id>>bucket_exp];
+            bitmask_type* bm = bucket_bitmask[id >> bucket_exp];
             bool present = false;
             if(bm)
             {
                 entity lo = id & bucket_mask;
-                present = (bm[lo>>bitmask_shift] >> (lo&bitmask_mask))&1;
+                present = (bm[lo >> bitmask_shift] >> (lo & bitmask_mask)) & 1;
             }
             if(!present && !batching)
             {
@@ -1912,17 +1927,20 @@ bool component_container<T>::test_invariant() const
                 return false;
             }
 
-            entity preceding_id = id-1;
-            entity prec_next_id = bucket_jump_table[preceding_id>>bucket_exp][preceding_id&bucket_mask];
+            entity preceding_id = id - 1;
+            entity prec_next_id = bucket_jump_table[preceding_id >> bucket_exp]
+                                                   [preceding_id & bucket_mask];
             if(prec_next_id != id && prec_next_id != prev_id)
             {
-                std::cout << "Jump table preceding entry has invalid target id!\n";
+                std::cout
+                    << "Jump table preceding entry has invalid target id!\n";
                 return false;
             }
 
             jump_table_entity_count++;
             prev_id = id;
-            entity next_id = bucket_jump_table[id>>bucket_exp][id&bucket_mask];
+            entity next_id =
+                bucket_jump_table[id >> bucket_exp][id & bucket_mask];
             if(next_id != 0 && next_id <= id)
             {
                 std::cout << "Jump table did not jump forward!\n";
@@ -1934,19 +1952,21 @@ bool component_container<T>::test_invariant() const
 
     if(jump_table_entity_count != entity_count && !batching)
     {
-        std::cout << "Number of entities in jump table does not match tracked number!\n";
+        std::cout << "Number of entities in jump table does not match tracked "
+                     "number!\n";
         return false;
     }
     return true;
 }
 
-template<typename T>
-void component_container<T>::print_bitmask() const
+template<typename T> void component_container<T>::print_bitmask() const
 {
     for(std::uint32_t i = 0; i < bucket_count; ++i)
     {
-        int present = (top_bitmask[i>>bitmask_shift] >> (i&bitmask_mask))&1;
-        std::cout << "bucket " << i << " ("<< (present ? "present" : "empty") << "): ";
+        int present =
+            (top_bitmask[i >> bitmask_shift] >> (i & bitmask_mask)) & 1;
+        std::cout << "bucket " << i << " (" << (present ? "present" : "empty")
+                  << "): ";
         if(!bucket_bitmask[i])
             std::cout << "(null)\n";
         else
@@ -1955,7 +1975,7 @@ void component_container<T>::print_bitmask() const
             {
                 for(std::uint32_t k = 0; k < 64; ++k)
                 {
-                    std::cout << ((bucket_bitmask[i][j]>>k)&1);
+                    std::cout << ((bucket_bitmask[i][j] >> k) & 1);
                 }
                 std::cout << " ";
             }
@@ -1964,8 +1984,7 @@ void component_container<T>::print_bitmask() const
     }
 }
 
-template<typename T>
-void component_container<T>::print_jump_table() const
+template<typename T> void component_container<T>::print_jump_table() const
 {
     std::uint32_t k = 0;
     for(std::uint32_t i = 0; i < bucket_count; ++i)
@@ -1975,14 +1994,16 @@ void component_container<T>::print_jump_table() const
             std::uint32_t k_start = k;
             std::uint32_t i_start = i;
             for(; i < bucket_count && bucket_jump_table[i] == nullptr; ++i)
-                k += 1<<bucket_exp;
+                k += 1 << bucket_exp;
             --i;
-            std::uint32_t k_end = k-1;
+            std::uint32_t k_end = k - 1;
             std::uint32_t i_end = i;
             if(i_start == i_end)
-                std::cout << "bucket " << i_start << ": " << k_start << " to " << k_end;
+                std::cout << "bucket " << i_start << ": " << k_start << " to "
+                          << k_end;
             else
-                std::cout << "buckets " << i_start << " to " << i_end << ": " << k_start << " to " << k_end;
+                std::cout << "buckets " << i_start << " to " << i_end << ": "
+                          << k_start << " to " << k_end;
         }
         else
         {
@@ -1990,11 +2011,11 @@ void component_container<T>::print_jump_table() const
 
             std::cout << "\tindices: |";
 
-            for(int j = 0; j < (1<<bucket_exp); ++j, ++k)
+            for(int j = 0; j < (1 << bucket_exp); ++j, ++k)
                 std::cout << " " << k << " |";
 
             std::cout << "\n\tdata:    |";
-            for(int j = 0; j < (1<<bucket_exp); ++j)
+            for(int j = 0; j < (1 << bucket_exp); ++j)
             {
                 std::cout << " " << bucket_jump_table[i][j] << " |";
             }
@@ -2004,10 +2025,8 @@ void component_container<T>::print_jump_table() const
 }
 #endif
 
-scene::scene()
-: id_counter(1), subscriber_counter(0), defer_batch(0)
-{
-}
+scene::scene(): id_counter(1), subscriber_counter(0), defer_batch(0)
+{}
 
 scene::~scene()
 {
@@ -2020,18 +2039,20 @@ template<typename Component>
 struct scene::foreach_impl<pass_id, Components...>::iterator_wrapper<Component*>
 {
     static constexpr bool required = false;
-    typename component_container<std::decay_t<std::remove_pointer_t<std::decay_t<Component>>>>::iterator iter;
+    typename component_container<
+        std::decay_t<std::remove_pointer_t<std::decay_t<Component>>>>::iterator
+        iter;
 };
 
 template<bool pass_id, typename... Components>
 template<typename F>
-void scene::foreach_impl<pass_id, Components...>::foreach(scene& ctx, F&& f)
+void scene::foreach_impl<pass_id, Components...>::foreach(scene& ctx, F && f)
 {
     ctx.start_batch();
 
     std::tuple component_it(make_iterator<Components>(ctx)...);
 #define monkero_apply_tuple(...) \
-    std::apply([&](auto&... it){return (__VA_ARGS__);}, component_it)
+std::apply([&](auto&... it) { return (__VA_ARGS__); }, component_it)
 
     // Note that all checks based on it.required are compile-time, it's
     // constexpr!
@@ -2055,16 +2076,18 @@ void scene::foreach_impl<pass_id, Components...>::foreach(scene& ctx, F&& f)
         // iterators.
         while(monkero_apply_tuple((bool)it.iter || ...))
         {
-            entity cur_id = monkero_apply_tuple(std::min({
-                (it.iter ? it.iter.get_id() : std::numeric_limits<entity>::max())...
-            }));
+            entity cur_id = monkero_apply_tuple(std::min({(
+                it.iter ? it.iter.get_id() : std::numeric_limits<entity>::max()
+            )...}));
             monkero_apply_tuple(call(
                 std::forward<F>(f),
                 cur_id,
                 (it.iter.get_id() == cur_id ? (*it.iter).second : nullptr)...
             ));
             monkero_apply_tuple(
-                (it.iter && it.iter.get_id() == cur_id ? (++it.iter, void()) : void()), ...
+                (it.iter && it.iter.get_id() == cur_id ? (++it.iter, void())
+                                                       : void()),
+                ...
             );
         }
     }
@@ -2072,29 +2095,34 @@ void scene::foreach_impl<pass_id, Components...>::foreach(scene& ctx, F&& f)
     {
         // This is the generic implementation for when there's multiple
         // components where some are potentially optional.
-        std::size_t min_length = monkero_apply_tuple(std::min({
-            (it.required ?
-                it.iter.get_container()->size() :
-                std::numeric_limits<std::size_t>::max()
-            )...
-        }));
+        std::size_t min_length = monkero_apply_tuple(std::min(
+            {(it.required ? it.iter.get_container()->size()
+                          : std::numeric_limits<std::size_t>::max())...}
+        ));
 
         component_container_entity_advancer advancer = {};
         monkero_apply_tuple(
-            (it.required && it.iter.get_container()->size() == min_length ?
-                (advancer = it.iter.get_advancer(), void()): void()), ...
+            (it.required && it.iter.get_container()->size() == min_length
+                 ? (advancer = it.iter.get_advancer(), void())
+                 : void()),
+            ...
         );
 
         while(advancer.current_entity != INVALID_ENTITY)
         {
             bool have_all_required = monkero_apply_tuple(
-                (it.iter.try_advance(advancer.current_entity) || !it.required) && ...
+                (it.iter.try_advance(advancer.current_entity) || !it.required
+                ) &&
+                ...
             );
             if(have_all_required)
             {
                 monkero_apply_tuple(call(
-                    std::forward<F>(f), advancer.current_entity,
-                    (it.iter.get_id() == advancer.current_entity ? (*it.iter).second : nullptr)...
+                    std::forward<F>(f),
+                    advancer.current_entity,
+                    (it.iter.get_id() == advancer.current_entity
+                         ? (*it.iter).second
+                         : nullptr)...
                 ));
             }
             advancer.advance();
@@ -2109,14 +2137,15 @@ template<bool pass_id, typename... Components>
 template<typename Component>
 struct scene::foreach_impl<pass_id, Components...>::converter<Component*>
 {
-    template<typename T>
-    static inline T* convert(T* val) { return val; }
+    template<typename T> static inline T* convert(T* val) { return val; }
 };
 
 template<bool pass_id, typename... Components>
 template<typename Component>
 template<typename T>
-T& scene::foreach_impl<pass_id, Components...>::converter<Component>::convert(T* val)
+T& scene::foreach_impl<pass_id, Components...>::converter<Component>::convert(
+    T* val
+)
 {
     return *val;
 }
@@ -2127,44 +2156,44 @@ void scene::foreach_impl<pass_id, Components...>::call(
     F&& f,
     entity id,
     std::decay_t<std::remove_pointer_t<std::decay_t<Components>>>*... args
-){
-    if constexpr(pass_id) f(id, converter<Components>::convert(args)...);
-    else f(converter<Components>::convert(args)...);
+)
+{
+    if constexpr(pass_id)
+        f(id, converter<Components>::convert(args)...);
+    else
+        f(converter<Components>::convert(args)...);
 }
 
-template<typename T, typename=void>
-struct has_ensure_dependency_components_exist: std::false_type { };
+template<typename T, typename = void>
+struct has_ensure_dependency_components_exist: std::false_type
+{};
 
 template<typename T>
 struct has_ensure_dependency_components_exist<
     T,
-    decltype((void)
-        T::ensure_dependency_components_exist(entity(), *(scene*)nullptr), void()
-    )
-> : std::true_type { };
+    decltype((void)T::ensure_dependency_components_exist(entity(), *(scene*)nullptr), void())>:
+    std::true_type
+{};
 
-template<typename Component>
-void scene::try_attach_dependencies(entity id)
+template<typename Component> void scene::try_attach_dependencies(entity id)
 {
     (void)id;
     if constexpr(has_ensure_dependency_components_exist<Component>::value)
         Component::ensure_dependency_components_exist(id, *this);
 }
 
-template<typename F>
-void scene::foreach(F&& f)
+template<typename F> void scene::foreach(F&& f)
 {
     // This one little trick lets us know the argument types without
     // actually using the std::function wrapper at runtime!
-    decltype(
-        foreach_redirector(std::function(f))
+    decltype(foreach_redirector(std::function(f))
     )::foreach(*this, std::forward<F>(f));
 }
 
-template<typename F>
-void scene::operator()(F&& f)
+template<typename F> void scene::operator()(F&& f)
 {
-    foreach(std::forward<F>(f));
+    foreach(std::forward<F>(f))
+        ;
 }
 
 entity scene::add()
@@ -2183,8 +2212,7 @@ entity scene::add()
     }
 }
 
-template<typename... Components>
-entity scene::add(Components&&... components)
+template<typename... Components> entity scene::add(Components&&... components)
 {
     entity id = add();
     attach(id, std::forward<Components>(components)...);
@@ -2196,9 +2224,7 @@ void scene::emplace(entity id, Args&&... args)
 {
     try_attach_dependencies<Component>(id);
 
-    get_container<Component>().emplace(
-        id, std::forward<Args>(args)...
-    );
+    get_container<Component>().emplace(id, std::forward<Args>(args)...);
 }
 
 template<typename... Components>
@@ -2206,25 +2232,24 @@ void scene::attach(entity id, Components&&... components)
 {
     (try_attach_dependencies<Components>(id), ...);
 
-    (
-        get_container<Components>().insert(
-            id, std::forward<Components>(components)
-        ), ...
-    );
+    (get_container<Components>().insert(
+         id, std::forward<Components>(components)
+     ),
+     ...);
 }
 
 void scene::remove(entity id)
 {
     for(auto& c: components)
-        if(c) c->erase(id);
+        if(c)
+            c->erase(id);
     if(defer_batch == 0)
         reusable_ids.push_back(id);
     else
         post_batch_reusable_ids.push_back(id);
 }
 
-template<typename Component>
-void scene::remove(entity id)
+template<typename Component> void scene::remove(entity id)
 {
     get_container<Component>().erase(id);
 }
@@ -2232,7 +2257,8 @@ void scene::remove(entity id)
 void scene::clear_entities()
 {
     for(auto& c: components)
-        if(c) c->clear();
+        if(c)
+            c->clear();
 
     if(defer_batch == 0)
     {
@@ -2245,18 +2271,20 @@ void scene::clear_entities()
 void scene::concat(
     scene& other,
     std::map<entity, entity>* translation_table_ptr
-){
+)
+{
     std::map<entity, entity> translation_table;
 
     for(auto& c: other.components)
-        if(c) c->list_entities(translation_table);
+        if(c)
+            c->list_entities(translation_table);
 
     start_batch();
-    for(auto& pair: translation_table)
-        pair.second = add();
+    for(auto& pair: translation_table) pair.second = add();
 
     for(auto& c: other.components)
-        if(c) c->concat(*this, translation_table);
+        if(c)
+            c->concat(*this, translation_table);
     finish_batch();
 
     if(translation_table_ptr)
@@ -2268,7 +2296,8 @@ entity scene::copy(scene& other, entity other_id)
     entity id = add();
 
     for(auto& c: other.components)
-        if(c) c->copy(*this, id, other_id);
+        if(c)
+            c->copy(*this, id, other_id);
 
     return id;
 }
@@ -2279,7 +2308,8 @@ void scene::start_batch()
     if(defer_batch == 1)
     {
         for(auto& c: components)
-            if(c) c->start_batch();
+            if(c)
+                c->start_batch();
     }
 }
 
@@ -2291,7 +2321,8 @@ void scene::finish_batch()
         if(defer_batch == 0)
         {
             for(auto& c: components)
-                if(c) c->finish_batch();
+                if(c)
+                    c->finish_batch();
 
             reusable_ids.insert(
                 reusable_ids.end(),
@@ -2303,26 +2334,22 @@ void scene::finish_batch()
     }
 }
 
-template<typename Component>
-size_t scene::count() const
+template<typename Component> size_t scene::count() const
 {
     return get_container<Component>().size();
 }
 
-template<typename Component>
-bool scene::has(entity id) const
+template<typename Component> bool scene::has(entity id) const
 {
     return get_container<Component>().contains(id);
 }
 
-template<typename Component>
-const Component* scene::get(entity id) const
+template<typename Component> const Component* scene::get(entity id) const
 {
     return get_container<Component>()[id];
 }
 
-template<typename Component>
-Component* scene::get(entity id)
+template<typename Component> Component* scene::get(entity id)
 {
     return get_container<Component>()[id];
 }
@@ -2330,17 +2357,13 @@ Component* scene::get(entity id)
 template<typename Component, typename... Args>
 Component* scene::find_component(Args&&... args)
 {
-    return get<Component>(
-        find<Component>(std::forward<Args>(args)...)
-    );
+    return get<Component>(find<Component>(std::forward<Args>(args)...));
 }
 
 template<typename Component, typename... Args>
 const Component* scene::find_component(Args&&... args) const
 {
-    return get<Component>(
-        find<Component>(std::forward<Args>(args)...)
-    );
+    return get<Component>(find<Component>(std::forward<Args>(args)...));
 }
 
 template<typename Component, typename... Args>
@@ -2349,8 +2372,7 @@ entity scene::find(Args&&... args) const
     return get_container<Component>().find_entity(std::forward<Args>(args)...);
 }
 
-template<typename Component>
-void scene::update_search_index()
+template<typename Component> void scene::update_search_index()
 {
     return get_container<Component>().update_search_index();
 }
@@ -2358,29 +2380,28 @@ void scene::update_search_index()
 void scene::update_search_indices()
 {
     for(auto& c: components)
-        if(c) c->update_search_index();
+        if(c)
+            c->update_search_index();
 }
 
-template<typename EventType>
-void scene::emit(const EventType& event)
+template<typename EventType> void scene::emit(const EventType& event)
 {
     size_t key = get_event_type_key<EventType>();
-    if(event_handlers.size() <= key) return;
+    if(event_handlers.size() <= key)
+        return;
 
-    for(event_handler& eh: event_handlers[key])
-        eh.callback(*this, &event);
+    for(event_handler& eh: event_handlers[key]) eh.callback(*this, &event);
 }
 
-template<typename EventType>
-size_t scene::get_handler_count() const
+template<typename EventType> size_t scene::get_handler_count() const
 {
     size_t key = get_event_type_key<EventType>();
-    if(event_handlers.size() <= key) return 0;
+    if(event_handlers.size() <= key)
+        return 0;
     return event_handlers[key].size();
 }
 
-template<typename... F>
-size_t scene::add_event_handler(F&&... callbacks)
+template<typename... F> size_t scene::add_event_handler(F&&... callbacks)
 {
     size_t id = subscriber_counter++;
     (internal_add_handler(id, std::forward<F>(callbacks)), ...);
@@ -2399,11 +2420,10 @@ void scene::remove_event_handler(size_t id)
 {
     for(std::vector<event_handler>& type_event_handlers: event_handlers)
     {
-        for(
-            auto it = type_event_handlers.begin();
+        for(auto it = type_event_handlers.begin();
             it != type_event_handlers.end();
-            ++it
-        ){
+            ++it)
+        {
             if(it->subscription_id == id)
             {
                 type_event_handlers.erase(it);
@@ -2413,8 +2433,7 @@ void scene::remove_event_handler(size_t id)
     }
 }
 
-template<typename... F>
-event_subscription scene::subscribe(F&&... callbacks)
+template<typename... F> event_subscription scene::subscribe(F&&... callbacks)
 {
     return event_subscription(
         this, add_event_handler(std::forward<F>(callbacks)...)
@@ -2425,50 +2444,50 @@ template<typename... EventTypes>
 void scene::add_receiver(receiver<EventTypes...>& r)
 {
     r.sub.ctx = this;
-    r.sub.subscription_id = bind_event_handler(
-        &r, &event_receiver<EventTypes>::handle...
-    );
+    r.sub.subscription_id =
+        bind_event_handler(&r, &event_receiver<EventTypes>::handle...);
 }
 
 template<typename Component>
 component_container<Component>& scene::get_container() const
 {
     size_t key = get_component_type_key<Component>();
-    if(components.size() <= key) components.resize(key+1);
+    if(components.size() <= key)
+        components.resize(key + 1);
     auto& base_ptr = components[key];
     if(!base_ptr)
     {
-        base_ptr.reset(new component_container<Component>(*const_cast<scene*>(this)));
+        base_ptr.reset(
+            new component_container<Component>(*const_cast<scene*>(this))
+        );
         if(defer_batch > 0)
             base_ptr->start_batch();
     }
     return *static_cast<component_container<Component>*>(base_ptr.get());
 }
 
-template<typename Component>
-size_t scene::get_component_type_key()
+template<typename Component> size_t scene::get_component_type_key()
 {
     static size_t key = component_type_key_counter++;
     return key;
 }
 
-template<typename Event>
-size_t scene::get_event_type_key()
+template<typename Event> size_t scene::get_event_type_key()
 {
     static size_t key = event_type_key_counter++;
     return key;
 }
 
-template<typename F>
-void scene::internal_add_handler(size_t id, F&& f)
+template<typename F> void scene::internal_add_handler(size_t id, F&& f)
 {
     using T = decltype(event_handler_type_detector(std::function(f)));
     size_t key = get_event_type_key<T>();
-    if(event_handlers.size() <= key) event_handlers.resize(key+1);
+    if(event_handlers.size() <= key)
+        event_handlers.resize(key + 1);
 
     event_handler h;
     h.subscription_id = id;
-    h.callback = [f = std::forward<F>(f)](scene& ctx, const void* ptr){
+    h.callback = [f = std::forward<F>(f)](scene& ctx, const void* ptr) {
         f(ctx, *(const T*)ptr);
     };
     event_handlers[key].push_back(std::move(h));
@@ -2480,11 +2499,12 @@ void scene::internal_bind_handler(size_t id, C* c, F&& f)
     using T = decltype(event_handler_type_detector(f));
 
     size_t key = get_event_type_key<T>();
-    if(event_handlers.size() <= key) event_handlers.resize(key+1);
+    if(event_handlers.size() <= key)
+        event_handlers.resize(key + 1);
 
     event_handler h;
     h.subscription_id = id;
-    h.callback = [c = c, f = std::forward<F>(f)](scene& ctx, const void* ptr){
+    h.callback = [c = c, f = std::forward<F>(f)](scene& ctx, const void* ptr) {
         ((*c).*f)(ctx, *(const T*)ptr);
     };
     event_handlers[key].push_back(std::move(h));
@@ -2492,9 +2512,12 @@ void scene::internal_bind_handler(size_t id, C* c, F&& f)
 
 template<typename... DependencyComponents>
 void dependency_components<DependencyComponents...>::
-ensure_dependency_components_exist(entity id, scene& ctx)
+    ensure_dependency_components_exist(entity id, scene& ctx)
 {
-    ((ctx.has<DependencyComponents>(id) ? void() : ctx.attach(id, DependencyComponents())), ...);
+    ((ctx.has<DependencyComponents>(id)
+          ? void()
+          : ctx.attach(id, DependencyComponents())),
+     ...);
 }
 
 }

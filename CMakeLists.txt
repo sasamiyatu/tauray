@@ -50,6 +50,10 @@ function(add_openxr)
 endfunction()
 add_openxr()
 
+IF (WIN32)
+add_compile_definitions(NOMINMAX)
+ENDIF()
+
 
 set(TAURAY_PROJECT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
 string(LENGTH "${TAURAY_PROJECT_ROOT}/" TAURAY_PROJECT_ROOT_PATH_SIZE)
@@ -162,6 +166,10 @@ add_executable(tauray
   src/main.cc
 )
 
+add_executable(dynamic_mesh
+  src/mesh_hacking.cc
+)
+
 target_include_directories(tauray-core PUBLIC SYSTEM
     "external"
     "external/SPIRV-Headers/include"
@@ -169,6 +177,7 @@ target_include_directories(tauray-core PUBLIC SYSTEM
 )
 target_link_libraries(tauray-core PUBLIC SDL2::SDL2 glm::glm glslang SPIRV openxr_loader Vulkan::Vulkan vk-radix-sort assimp::assimp)
 target_link_libraries(tauray PUBLIC tauray-core SDL2::SDL2main)
+target_link_libraries(dynamic_mesh PUBLIC tauray-core SDL2::SDL2main)
 
 if(MSVC)
   target_compile_options(tauray-core PRIVATE /W4 /WX- /MP)
@@ -230,6 +239,11 @@ target_compile_features(tauray PUBLIC cxx_std_17)
 set_property(TARGET tauray PROPERTY CXX_STANDARD 17)
 set_property(TARGET tauray PROPERTY CXX_STANDARD_REQUIRED ON)
 set_property(TARGET tauray PROPERTY CXX_EXTENSIONS OFF)
+
+target_compile_features(dynamic_mesh PUBLIC cxx_std_17)
+set_property(TARGET dynamic_mesh PROPERTY CXX_STANDARD 17)
+set_property(TARGET dynamic_mesh PROPERTY CXX_STANDARD_REQUIRED ON)
+set_property(TARGET dynamic_mesh PROPERTY CXX_EXTENSIONS OFF)
 
 install(TARGETS tauray
     RUNTIME DESTINATION bin
