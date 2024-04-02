@@ -26,7 +26,7 @@ void main()
         float hist_len = moments.z;
         vec4 c_center = imageLoad(in_diffuse, p);
         vec4 spec_center = imageLoad(in_specular, p);
-        if (hist_len < 4.0)
+        if (false && hist_len < 4.0)
         {
             float sum_w = 0.0;
             vec3 sum_diffuse = vec3(0.0);

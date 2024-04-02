@@ -113,17 +113,17 @@ void main()
         vec4 filtered_spec = sum_specular / vec4(vec3(sum_w_spec), sum_w_spec * sum_w_spec);
         if (control.iteration == 0)
         {
-            imageStore(diffuse_hist, p, filtered_color);
+            imageStore(diffuse_hist, p, center_color);
             imageStore(spec_hist, p, filtered_spec);
         }
         if (control.iteration == control.iteration_count - 1)
         {
             vec4 albedo = imageLoad(in_albedo, p);
-            imageStore(final_output, p, vec4(filtered_spec.rgb + filtered_color.rgb * albedo.rgb, 1.0));
+            imageStore(final_output, p, vec4(center_color, 1.0));
         }
         else
         {
-            imageStore(diffuse_out, p, filtered_color);
+            imageStore(diffuse_out, p, center_color);
             imageStore(specular_out, p, filtered_spec);
         }
     }

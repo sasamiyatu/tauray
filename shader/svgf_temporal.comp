@@ -174,7 +174,7 @@ void main()
         vec3 out_diff = mix(prev_color.rgb, current_diffuse.rgb, alpha);
         vec3 out_spec = mix(prev_specular.rgb, current_specular.rgb, alpha);
 
-        imageStore(out_color, p, vec4(out_diff, variance));
+        imageStore(out_color, p, vec4(current_color.rgb, variance));
         imageStore(out_specular, p, vec4(out_spec, variance));
         imageStore(out_moments, p, vec4(moments.xy, 1.0 / alpha, 0.0));
     }
