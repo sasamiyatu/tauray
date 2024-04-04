@@ -1,6 +1,7 @@
 #ifndef GBUFFER_GLSL
 #define GBUFFER_GLSL
 #include "material.glsl"
+#extension GL_EXT_debug_printf : enable
 
 //==============================================================================
 // Color
@@ -132,7 +133,7 @@ void write_gbuffer_reflection(vec4 color, ivec3 pos) {}
 void write_gbuffer_reflection(vec4 color) {}
 void accumulate_gbuffer_reflection(
     vec4 reflection, ivec3 pos, uint samples, uint previous_samples
-) {}
+) {if(pos.xy == ivec2(640, 360)) debugPrintfEXT("Not good"); }
 vec4 read_gbuffer_reflection(ivec3 pos) { return vec4(0); }
 
 #endif

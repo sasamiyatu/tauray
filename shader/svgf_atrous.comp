@@ -119,7 +119,7 @@ void main()
         if (control.iteration == control.iteration_count - 1)
         {
             vec4 albedo = imageLoad(in_albedo, p);
-            imageStore(final_output, p, vec4(center_color, 1.0));
+            imageStore(final_output, p, vec4(center_color.rgb, 1.0));
         }
         else
         {

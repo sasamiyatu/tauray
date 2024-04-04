@@ -10,23 +10,25 @@
 layout (local_size_x = 16, local_size_y = 16) in;
 
 layout(binding = 0, set = 0, rgba32f) uniform readonly image2DArray in_color;
-layout(binding = 1, set = 0, rg16_snorm) uniform readonly image2DArray in_normal;
-layout(binding = 2, set = 0, rgba16f) uniform readonly image2DArray in_albedo;
-layout(binding = 3, set = 0, rg16_snorm) uniform readonly image2DArray previous_normal;
-layout(binding = 4, set = 0, rg32f) uniform readonly image2DArray in_screen_motion;
-layout(binding = 5, set = 0, rgba32f) uniform readonly image2DArray previous_color;
-layout(binding = 6, set = 0, rgba32f) uniform image2DArray out_color;
-layout(binding = 7, set = 0, rgba32f) uniform readonly image2DArray in_linear_depth;
-layout(binding = 8, set = 0, rgba32f) uniform readonly image2DArray previous_linear_depth;
-layout(binding = 9, set = 0, rgba32f) uniform readonly image2DArray previous_moments;
-layout(binding = 10, set = 0, rgba32f) uniform image2DArray out_moments;
-layout(binding = 11, set = 0, rgba32f) uniform readonly image2DArray in_diffuse;
-layout(binding = 12, set = 0, rgba32f) uniform readonly image2DArray previous_specular;
-layout(binding = 13, set = 0, rgba32f) uniform image2DArray out_specular;
-layout(binding = 14) buffer jitter_info_buffer
+layout(binding = 1, set = 0, rgba32f) uniform readonly image2DArray in_specular;
+layout(binding = 2, set = 0, rg16_snorm) uniform readonly image2DArray in_normal;
+layout(binding = 3, set = 0, rgba16f) uniform readonly image2DArray in_albedo;
+layout(binding = 4, set = 0, rg16_snorm) uniform readonly image2DArray previous_normal;
+layout(binding = 5, set = 0, rg32f) uniform readonly image2DArray in_screen_motion;
+layout(binding = 6, set = 0, rgba32f) uniform readonly image2DArray previous_color;
+layout(binding = 7, set = 0, rgba32f) uniform image2DArray out_color;
+layout(binding = 8, set = 0, rgba32f) uniform readonly image2DArray in_linear_depth;
+layout(binding = 9, set = 0, rgba32f) uniform readonly image2DArray previous_linear_depth;
+layout(binding = 10, set = 0, rgba32f) uniform readonly image2DArray previous_moments;
+layout(binding = 11, set = 0, rgba32f) uniform image2DArray out_moments;
+layout(binding = 12, set = 0, rgba32f) uniform readonly image2DArray in_diffuse;
+layout(binding = 13, set = 0, rgba32f) uniform readonly image2DArray previous_specular;
+layout(binding = 14, set = 0, rgba32f) uniform image2DArray out_specular;
+layout(binding = 15) buffer jitter_info_buffer
 {
     vec4 jitter[];
 } jitter_info;
+layout(binding = 16, set = 0, rgba32f) uniform image2DArray in_material;
 
 bool temporal_reprojection_is_valid(ivec3 p, float z, float prev_z, vec3 normal, vec3 prev_normal, float motion_z)
 {
@@ -152,7 +154,8 @@ void main()
         vec4 current_color = imageLoad(in_color, p);
         vec4 current_diffuse = imageLoad(in_diffuse, p);
         vec4 current_albedo = imageLoad(in_albedo, p);
-        vec4 current_specular = max(vec4(0.0), current_color - current_diffuse * current_albedo);
+        vec4 current_specular = imageLoad(in_specular, p);
+        vec2 metallic_roughness = imageLoad(in_material, p).xy;
         if (any(isnan(current_color))) current_color = vec4(0.0);
         if (any(isnan(current_diffuse))) current_diffuse = vec4(0.0);
         if (any(isnan(current_specular))) current_specular = vec4(0.0);
@@ -174,7 +177,10 @@ void main()
         vec3 out_diff = mix(prev_color.rgb, current_diffuse.rgb, alpha);
         vec3 out_spec = mix(prev_specular.rgb, current_specular.rgb, alpha);
 
-        imageStore(out_color, p, vec4(current_color.rgb, variance));
+        vec3 remodulated = current_albedo.rgb * mix(current_diffuse.rgb, current_specular.rgb, metallic_roughness.x) + current_specular.rgb * (1.0 - metallic_roughness.x);
+        imageStore(out_color, p, vec4((current_diffuse.rgb + current_specular.rgb) * current_albedo.rgb, variance));
+        imageStore(out_color, p, vec4(remodulated, variance));
+        //imageStore(out_color, p, vec4(current_color.rgb, variance));
         imageStore(out_specular, p, vec4(out_spec, variance));
         imageStore(out_moments, p, vec4(moments.xy, 1.0 / alpha, 0.0));
     }
