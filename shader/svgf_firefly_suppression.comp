@@ -1,0 +1,79 @@
+#version 460
+#extension GL_GOOGLE_include_directive : enable
+
+#include "svgf.glsl"
+#include "color.glsl"
+
+layout(binding = 0, set = 0, rgba32f) uniform readonly image2DArray accumulated_diffuse;
+layout(binding = 1, set = 0, rgba32f) uniform image2DArray filtered_diffuse;
+
+layout (local_size_x = 16, local_size_y = 16) in;
+void main()
+{
+    const ivec3 p = ivec3(gl_GlobalInvocationID.xyz);
+    if (!all(lessThan(p.xy, control.size))) return;
+
+    // Firefly reduction
+    // RCRS filter based on NVIDIA ReLAX presentation
+
+    vec4 out_color = imageLoad(accumulated_diffuse, p);
+
+#if FIREFLY_SUPPRESSION_ENABLED == 1
+    int radius = 1;
+    vec4 min_color = vec4(0.0);
+    vec4 max_color = vec4(0.0);
+    float min_luminance = 1e38;
+    float max_luminance = -1.0;
+    float min_variance = 1e38;
+    float max_variance = 0.0;
+    for (int y = -radius; y <= radius; ++y)
+    {
+        for (int x = -radius; x <= radius; ++x)
+        {
+            if (x == 0 && y == 0) // Ignore center
+                continue;
+            ivec3 q = p + ivec3(x, y, 0);
+            if (any(lessThan(q.xy, ivec2(0))) || any(greaterThanEqual(q.xy, control.size))) // Don't sample off-screen
+                continue;
+            
+            vec4 c = imageLoad(accumulated_diffuse, q);
+
+            float l = rgb_to_luminance(c.rgb);
+            if (l < min_luminance)
+            {
+                min_luminance = l;
+                min_color = c;
+            }
+            if (l > max_luminance)
+            {
+                max_luminance = l;
+                max_color = c;
+            }
+            if (c.a < min_variance)
+            {
+                min_variance = c.a;
+            }
+            if (c.a > max_variance)
+            {
+                max_variance = c.a;
+            }
+        }
+    }
+
+    float l = rgb_to_luminance(out_color.rgb);
+    if (l < min_luminance)
+    {
+        out_color = min_color;
+    }
+    else if (l > max_luminance)
+    {
+        out_color = max_color;
+    }
+
+#if 0
+    out_color.a = clamp(out_color.a, min_variance, max_variance);
+#endif
+#endif
+
+    imageStore(filtered_diffuse, p, out_color);
+}

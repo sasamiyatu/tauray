@@ -133,7 +133,7 @@ void write_gbuffer_reflection(vec4 color, ivec3 pos) {}
 void write_gbuffer_reflection(vec4 color) {}
 void accumulate_gbuffer_reflection(
     vec4 reflection, ivec3 pos, uint samples, uint previous_samples
-) {if(pos.xy == ivec2(640, 360)) debugPrintfEXT("Not good"); }
+) {}
 vec4 read_gbuffer_reflection(ivec3 pos) { return vec4(0); }
 
 #endif
@@ -478,7 +478,8 @@ layout(location = LINEAR_DEPTH_TARGET_LOCATION) out vec4 linear_depth_target;
 
 void write_gbuffer_linear_depth()
 {
-    const float linear_depth = gl_FragCoord.z / gl_FragCoord.w;
+    //const float linear_depth = gl_FragCoord.z / gl_FragCoord.w;
+    const float linear_depth = 1.0 / gl_FragCoord.w; // Viewspace Z coordinate
     const vec2 grad = vec2(dFdx(linear_depth), dFdy(linear_depth));
     linear_depth_target = vec4(linear_depth, grad, 0.0);
 }

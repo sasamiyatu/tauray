@@ -47,6 +47,7 @@ void post_processing_renderer::set_gbuffer_spec(gbuffer_spec& spec) const
         spec.linear_depth_present = true;
         spec.material_present = true;
         spec.reflection_present = true;
+        spec.linear_depth_usage |= vk::ImageUsageFlagBits::eSampled;
     }
 
     if(opt.bmfr.has_value())

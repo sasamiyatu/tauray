@@ -48,6 +48,14 @@ private:
     compute_pipeline temporal_comp;
     push_descriptor_set estimate_variance_desc;
     compute_pipeline estimate_variance_comp;
+    push_descriptor_set firefly_suppression_desc;
+    compute_pipeline firefly_suppression_comp;
+    push_descriptor_set disocclusion_fix_desc;
+    compute_pipeline disocclusion_fix_comp;
+    push_descriptor_set prefilter_variance_desc;
+    compute_pipeline prefilter_variance_comp;    
+    push_descriptor_set preblur_desc;
+    compute_pipeline preblur_comp;
     options opt;
     gbuffer_target input_features;
     gbuffer_target prev_features;
@@ -59,10 +67,14 @@ private:
     std::unique_ptr<texture> render_target_texture[8];
     timer svgf_timer;
 
+    sampler my_sampler;
+
     std::vector<vec4> jitter_history;
     gpu_buffer jitter_buffer;
     scene_stage* ss;
     uint32_t scene_state_counter;
+
+    gpu_buffer uniforms;
 };
 }
 
