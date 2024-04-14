@@ -363,6 +363,7 @@ void evaluate_ray(
     diffuse = vec4(0,0,0,-1);
     reflection = vec4(0,0,0,-1);
 
+    float secondary_hit_dist = RAY_MAX_DIST;
     float regularization = 1.0f;
     float bsdf_pdf = 0.0f;
     bsdf_lobes primary_lobes = bsdf_lobes(0,0,0,0);
@@ -459,6 +460,10 @@ void evaluate_ray(
 #endif
             }
             add_demodulated_color(primary_lobes, radiance, diffuse.rgb, reflection.rgb);
+            if (bounce == 1)
+            {
+                secondary_hit_dist = length(v.pos - pos);
+            }
         }
 
         if(terminal) break;
@@ -484,6 +489,9 @@ void evaluate_ray(
 #endif
         if(max(attenuation.x, max(attenuation.y, attenuation.z)) <= 0.0f) break;
     }
+
+    diffuse.a = 1.0 / secondary_hit_dist;
+    reflection.a = 1.0 / secondary_hit_dist;
 }
 
 #endif
@@ -522,8 +530,8 @@ void get_world_camera_ray(inout local_sampler lsampler, out vec3 origin, out vec
 
 void write_all_outputs(
     vec3 color,
-    vec3 diffuse,
-    vec3 reflection,
+    vec4 diffuse,
+    vec4 reflection,
     pt_vertex_data first_hit_vertex,
     sampled_material first_hit_material
 ){
@@ -558,8 +566,8 @@ void write_all_outputs(
 #endif
 
         accumulate_gbuffer_color(vec4(color, alpha), p, control.samples, prev_samples);
-        accumulate_gbuffer_diffuse(vec4(diffuse, alpha), p, control.samples, prev_samples);
-        accumulate_gbuffer_reflection(vec4(reflection, alpha), p, control.samples, prev_samples);
+        accumulate_gbuffer_diffuse(vec4(diffuse), p, control.samples, prev_samples);
+        accumulate_gbuffer_reflection(vec4(reflection), p, control.samples, prev_samples);
     }
 }
 #endif

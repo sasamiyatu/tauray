@@ -136,7 +136,7 @@ float get_specular_lobe_half_angle(float percentage_of_energy, float roughness)
 #define DISOCCLUSION_FIX_ENABLED 1
 #define DISOCCLUSION_FIX_USE_EDGE_STOPPERS 1
 
-#define FIREFLY_SUPPRESSION_ENABLED 1
+#define FIREFLY_SUPPRESSION_ENABLED 0
 
 #define SPATIAL_VARIANCE_ESTIMATE_ENABLED 1
 
@@ -153,8 +153,9 @@ float get_specular_lobe_half_angle(float percentage_of_energy, float roughness)
 #define OUTPUT_REMODULATED_DENOISED_DIFFUSE 4
 #define OUTPUT_DENOISED_SPECULAR 5
 #define OUTPUT_REMODULATED_DENOISED_DIFFUSE_AND_SPECULAR 6
+#define OUTPUT_DIFFUSE_HITDIST 7
 
-#define FINAL_OUTPUT 6
+#define FINAL_OUTPUT OUTPUT_REMODULATED_DENOISED_DIFFUSE_AND_SPECULAR
 
 #define MAX_ACCUMULATED_FRAMES 32
 

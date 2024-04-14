@@ -119,8 +119,8 @@ void main()
 
     write_all_outputs(
         sum_color.rgb / SAMPLES_PER_PASS,
-        sum_diffuse.rgb / SAMPLES_PER_PASS,
-        sum_reflection.rgb / SAMPLES_PER_PASS,
+        sum_diffuse.rgba / SAMPLES_PER_PASS,
+        sum_reflection.rgba / SAMPLES_PER_PASS,
         first_hit_vertex,
         first_hit_material
     );

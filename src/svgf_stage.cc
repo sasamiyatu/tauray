@@ -344,6 +344,7 @@ void svgf_stage::record_command_buffers()
             atrous_desc.set_image(dev->id, "specular_in", {{{}, atrous_specular_pingpong[out_index].view, vk::ImageLayout::eGeneral}});
             atrous_desc.set_image(dev->id, "specular_out", { {{}, atrous_specular_pingpong[in_index].view, vk::ImageLayout::eGeneral} });
             atrous_desc.set_image(dev->id, "world_position", { {{}, input_features.pos.view, vk::ImageLayout::eGeneral} });
+            atrous_desc.set_image(dev->id, "raw_diffuse", { {{}, input_features.diffuse.view, vk::ImageLayout::eGeneral} });
             atrous_desc.set_buffer("uniforms_buffer", uniforms);
 
             atrous_comp.push_descriptors(cb, atrous_desc, 0);
