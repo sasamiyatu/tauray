@@ -490,8 +490,8 @@ void evaluate_ray(
         if(max(attenuation.x, max(attenuation.y, attenuation.z)) <= 0.0f) break;
     }
 
-    diffuse.a = 1.0 / secondary_hit_dist;
-    reflection.a = 1.0 / secondary_hit_dist;
+    diffuse.a = secondary_hit_dist != RAY_MAX_DIST ? 1.0 / secondary_hit_dist : 0.0;
+    reflection.a = secondary_hit_dist != RAY_MAX_DIST ? 1.0 / secondary_hit_dist : 0.0;
 }
 
 #endif

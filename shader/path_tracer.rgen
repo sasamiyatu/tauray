@@ -79,8 +79,8 @@ void main()
     pt_vertex_data first_hit_vertex;
     sampled_material first_hit_material;
     vec3 sum_color = vec3(0,0,0);
-    vec4 sum_diffuse = vec4(0,0,0,-1);
-    vec4 sum_reflection = vec4(0,0,0,-1);
+    vec4 sum_diffuse = vec4(0,0,0,0);
+    vec4 sum_reflection = vec4(0,0,0,0);
 #if SAMPLES_PER_PASS != 1
     for(int i = 0; i < SAMPLES_PER_PASS; ++i)
 #else
@@ -105,6 +105,10 @@ void main()
             diffuse, reflection,
             first_hit_vertex, first_hit_material
         );
+        // if (get_pixel_pos() == ivec2(640, 360))
+        // {
+        //     debugPrintfEXT("inv hit dist: %f", diffuse.a);
+        // }
 #ifdef USE_WHITE_ALBEDO_ON_FIRST_BOUNCE
         vec3 old_color = first_hit_material.albedo.rgb;
         first_hit_material.albedo.rgb = vec3(1);

@@ -105,13 +105,87 @@ float get_specular_lobe_half_angle(float percentage_of_energy, float roughness)
     return atan(roughness * sqrt(percentage_of_energy / (1.0 - percentage_of_energy)));
 }
 
+// Approximates the directional-hemispherical reflectance of the micriofacet specular BRDF with GG-X distribution
+// Source: "Accurate Real-Time Specular Reflections with Radiance Caching" in Ray Tracing Gems by Hirvonen et al.
+vec3 specularGGXReflectanceApprox(vec3 specular_f0, float alpha, float NdotV)
+{
+	const mat2 A = transpose(mat2(
+		0.995367f, -1.38839f,
+		-0.24751f, 1.97442f
+	));
+
+	const mat3 B = transpose(mat3(
+		1.0f, 2.68132f, 52.366f,
+		16.0932f, -3.98452f, 59.3013f,
+		-5.18731f, 255.259f, 2544.07f
+	));
+
+	const mat2 C = transpose(mat2(
+		-0.0564526f, 3.82901f,
+		16.91f, -11.0303f
+	));
+
+	const mat3 D = transpose(mat3(
+		1.0f, 4.11118f, -1.37886f,
+		19.3254f, -28.9947f, 16.9514f,
+		0.545386f, 96.0994f, -79.4492f
+	));
+
+	const float alpha2 = alpha * alpha;
+	const float alpha3 = alpha * alpha2;
+	const float NdotV2 = NdotV * NdotV;
+	const float NdotV3 = NdotV * NdotV2;
+
+	const float E = dot(A * vec2(1.0f, NdotV), vec2(1.0f, alpha));
+	const float F = dot(B * vec3(1.0f, NdotV, NdotV3), vec3(1.0f, alpha, alpha3));
+
+	const float G = dot(C * vec2(1.0f, NdotV), vec2(1.0f, alpha));
+	const float H = dot(D * vec3(1.0f, NdotV2, NdotV3), vec3(1.0f, alpha, alpha3));
+
+	// Turn the bias off for near-zero specular 
+	const float biasModifier = saturate(dot(specular_f0, vec3(0.333333f, 0.333333f, 0.333333f)) * 50.0f);
+
+	const float bias = max(0.0f, (E / F)) * biasModifier;
+	const float scale = max(0.0f, (G / H));
+
+	return vec3(bias, bias, bias) + vec3(scale, scale, scale) * specular_f0;
+}
+
+vec3 environment_term_rtg(vec3 f0, float NoV, float roughness)
+{
+    float m = roughness;
+
+    vec4 X;
+    X.x = 1.0;
+    X.y = NoV;
+    X.z = NoV * NoV;
+    X.w = NoV * X.z;
+
+    vec4 Y;
+    Y.x = 1.0;
+    Y.y = m;
+    Y.z = m * m;
+    Y.w = m * Y.z;
+
+    mat2 M1 = mat2(0.99044, 1.29678, -1.28514, -0.755907);
+    mat3 M2 = mat3(1.0, 20.3225, 121.563, 2.92338, -27.0302, 626.13, 59.4188, 222.592, 316.627);
+
+    mat2 M3 = mat2(0.0365463, 9.0632, 3.32707, -9.04756);
+    mat3 M4 = mat3(1.0, 9.04401, 5.56589, 3.59685, -16.3174, 19.7886, -1.36772, 9.22949, -20.2123);
+
+    float bias = dot(M1 * X.xy, Y.xy) / (dot(M2 * X.xyw, Y.xyw));
+    float scale = dot(M3 * X.xy, Y.xy) / (dot(M4 * X.xzw, Y.xyw));
+
+    return clamp(bias + scale * f0, vec3(0.0), vec3(1.0));
+}
 
 //====================================================================================
 // Configurable params
 //====================================================================================
 
 // Base blur radius in pixels, actually blur radius is scaled by frustum size
-#define PREPASS_BLUR_RADIUS 30.0
+#define PREPASS_DIFFUSE_BLUR_RADIUS 30.0
+#define PREPASS_SPECULAR_BLUR_RADIUS 50.0
 
 #define TEMPORAL_ACCUMULATION_USE_BICUBIC_FILTER 1
 
@@ -155,7 +229,7 @@ float get_specular_lobe_half_angle(float percentage_of_energy, float roughness)
 #define OUTPUT_REMODULATED_DENOISED_DIFFUSE_AND_SPECULAR 6
 #define OUTPUT_DIFFUSE_HITDIST 7
 
-#define FINAL_OUTPUT OUTPUT_REMODULATED_DENOISED_DIFFUSE_AND_SPECULAR
+#define FINAL_OUTPUT 5
 
 #define MAX_ACCUMULATED_FRAMES 32
 
