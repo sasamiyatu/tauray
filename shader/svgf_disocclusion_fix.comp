@@ -20,6 +20,7 @@ layout(binding = 9, set = 0, rgba32f) uniform image2DArray specular_hist;
 layout(binding = 10, set = 0, rgba32f) uniform image2DArray filtered_specular;
 layout(binding = 11, set = 0, rgba32f) uniform readonly image2DArray accumulated_specular_hit_distance;
 layout(binding = 12, set = 0, rgba32f) uniform image2DArray specular_hit_distance_history;
+layout(binding = 13, set = 0, rgba32f) uniform image2DArray in_material;
 
 
 layout (local_size_x = 16, local_size_y = 16) in;
@@ -35,7 +36,9 @@ void main()
     camera_data curr_camera = cameras.current;
 
     vec4 center = imageLoad(accumulated_diffuse, p);
+    vec4 center_specular = imageLoad(accumulated_specular, p);
     vec4 averaged = center;
+    vec4 averaged_spec = center_specular;
     vec3 moments = imageLoad(moments_histlen, p).xyz;
     float history_length = moments.z;
     float specular_hit_t = imageLoad(accumulated_specular_hit_distance, p).r;
@@ -45,6 +48,8 @@ void main()
         vec4 center_depth = imageLoad(depth, p);
         vec3 center_normal = unpack_gbuffer_normal(imageLoad(normal, p).rg);
         vec3 center_pos = imageLoad(world_position, p).xyz;
+        vec2 center_material = imageLoad(in_material, p).xy;
+        float center_roughness = center_material.y;
         
         float frustum_size = control.min_rect_dim_mul_unproject * abs(center_depth.x);
         float inv_dist_to_point = 1.0 / frustum_size;
@@ -62,11 +67,14 @@ void main()
         const float spec_half_angle = get_specular_lobe_half_angle(0.75, 1.0);
 
         const int radius = 2;
-        float w_sum = 0.0;
 
         float stride = exp2(3.0f - history_length) + 1.0;
 
         vec4 color_sum = vec4(0.0);
+        vec4 spec_sum = vec4(0.0);
+
+        float w_sum = 0.0;
+        float w_sum_spec = 0.0;
     #if PRINT_PLANE_DISTS == 1
         float plane_dists[5 * 5];
     #endif
@@ -82,7 +90,8 @@ void main()
                 if (!is_in_screen(q.xy)) continue;
 
                 vec4 c = imageLoad(accumulated_diffuse, q);
-                if (any(isnan(c))) continue;
+                vec4 spec = imageLoad(accumulated_specular, q);
+                if (any(isnan(c)) || any(isnan(spec))) continue;
 
                 vec3 X = imageLoad(world_position, q).xyz;
                 vec3 Xvs = (curr_camera.view * vec4(X, 1.0)).xyz;
@@ -90,12 +99,15 @@ void main()
                 vec3 Ns = unpack_gbuffer_normal(imageLoad(normal, q).rg);
                 float Nvs = dot(Nv, Xvs);
                 float Z = imageLoad(depth, q).x;
+                vec2 sample_material = imageLoad(in_material, q).xy;
+                float sample_roughness = sample_material.y;
 
     #if 1
                 float plane_dist = abs(dot((X - center_pos), center_normal) * plane_dist_scale);
     #else
                 float plane_dist = abs(Nvs - NoX) * plane_dist_scale; // View space version, can be faster if position is reconstructed from linear depth
     #endif
+
                 float plane_dist_weight = smoothstep(1, 0, plane_dist);
 
                 float ndotn = saturate(dot(Ns, center_normal));
@@ -105,7 +117,18 @@ void main()
                 float w = 1.0;
     #if DISOCCLUSION_FIX_USE_EDGE_STOPPERS == 1
                 w *= plane_dist_weight;
+
+                float w_spec = w;
+
                 w *= normal_weight;
+
+                float relax_lobe_weight = 0.5;
+                vec3 sample_view = normalize(curr_camera.origin.xyz - X);
+                vec3 relaxed_view = normalize(mix(sample_view, V, relax_lobe_weight));
+                float lobe_similarity = specular_lobe_similarity(V, center_normal, center_roughness, relaxed_view, Ns, sample_roughness);
+                float lobe_weight = pow(lobe_similarity, 128.0);
+                w_spec *= lobe_weight;
+
     #endif
 
     #if PRINT_PLANE_DISTS == 1
@@ -113,6 +136,9 @@ void main()
     #endif
                 color_sum += c * vec4(vec3(w), w * w);
                 w_sum += w;
+
+                spec_sum += spec * vec4(vec3(w_spec), w_spec * w_spec);
+                w_sum_spec += w_spec;
             }
         }
 
@@ -147,17 +173,20 @@ void main()
                 plane_dists[24]
             );
         }
+
     #endif
 
+        w_sum = max(w_sum, 1e-4);
+        w_sum_spec = max(w_sum_spec, 1e-4);
         averaged = color_sum / vec4(vec3(w_sum), w_sum * w_sum);
+        averaged_spec = spec_sum / vec4(vec3(w_sum_spec), w_sum_spec * w_sum_spec);
     }
 #endif
 
-    vec4 center_specular = imageLoad(accumulated_specular, p);
 
     imageStore(diffuse_hist, p, averaged);
     imageStore(filtered_diffuse, p, averaged);
-    imageStore(filtered_specular, p, center_specular);
-    imageStore(specular_hist, p, center_specular);
+    imageStore(filtered_specular, p, averaged_spec);
+    imageStore(specular_hist, p, averaged_spec);
     imageStore(specular_hit_distance_history, p, vec4(vec3(specular_hit_t), 1.0));
 }

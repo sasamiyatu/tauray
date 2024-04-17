@@ -19,8 +19,6 @@ static VKAPI_ATTR VkBool32 VKAPI_CALL debug_callback(
     // These are usually spammy and useless messages.
     if(type == VK_DEBUG_UTILS_MESSAGE_TYPE_GENERAL_BIT_EXT)
         return false;
-    if (severity == VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT) // DONT PUSH
-        return false;
     (void)severity;
     (void)type;
     (void)pUserData;

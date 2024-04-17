@@ -195,6 +195,8 @@ vec3 environment_term_rtg(vec3 f0, float NoV, float roughness)
 // Randomly offset sample positions to mitigate "ringing"
 #define ATROUS_RANDOM_OFFSET 1
 
+#define DEMODULATION_USE_SPLIT_SUM_APPROXIMATION 1
+
 //====================================================================================
 // Toggle different passes on and off, useful for debugging
 //====================================================================================
@@ -210,7 +212,7 @@ vec3 environment_term_rtg(vec3 f0, float NoV, float roughness)
 #define DISOCCLUSION_FIX_ENABLED 1
 #define DISOCCLUSION_FIX_USE_EDGE_STOPPERS 1
 
-#define FIREFLY_SUPPRESSION_ENABLED 0
+#define FIREFLY_SUPPRESSION_ENABLED 1
 
 #define SPATIAL_VARIANCE_ESTIMATE_ENABLED 1
 
@@ -228,8 +230,12 @@ vec3 environment_term_rtg(vec3 f0, float NoV, float roughness)
 #define OUTPUT_DENOISED_SPECULAR 5
 #define OUTPUT_REMODULATED_DENOISED_DIFFUSE_AND_SPECULAR 6
 #define OUTPUT_DIFFUSE_HITDIST 7
+#define OUTPUT_SPECULAR_VARIANCE 8
+#define OUTPUT_UNFILTERED_SPECULAR_VARIANCE 9
+#define OUTPUT_REMODULATED_DENOISED_SPECULAR 10
+#define OUTPUT_RAW_INPUT 11
 
-#define FINAL_OUTPUT 5
+#define FINAL_OUTPUT 6
 
 #define MAX_ACCUMULATED_FRAMES 32
 

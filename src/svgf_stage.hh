@@ -64,12 +64,13 @@ private:
     render_target atrous_diffuse_pingpong[2];
     render_target atrous_specular_pingpong[2];
     render_target moments_history[2];
+    render_target moments_history_specular[2];
     render_target svgf_color_hist;
     render_target svgf_spec_hist;
     render_target specular_hit_distance_history;
     render_target accumulated_specular_hit_distance;
     render_target emissive; // Needed to store emissive for reconstruction later, since diffuse and specular don't have it and path tracer doesn't store it separately.
-    static constexpr uint32_t render_target_count = 11;
+    static constexpr uint32_t render_target_count = 13;
     std::unique_ptr<texture> render_target_texture[render_target_count];
     timer svgf_timer;
 

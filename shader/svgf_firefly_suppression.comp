@@ -19,7 +19,7 @@ void main()
     // RCRS filter based on NVIDIA ReLAX presentation
 
     vec4 out_color = imageLoad(accumulated_diffuse, p);
-
+    vec4 out_specular = imageLoad(accumulated_specular, p);
 #if FIREFLY_SUPPRESSION_ENABLED == 1
     int radius = 1;
     vec4 min_color = vec4(0.0);
@@ -28,6 +28,13 @@ void main()
     float max_luminance = -1.0;
     float min_variance = 1e38;
     float max_variance = 0.0;
+
+    vec4 min_spec = vec4(0.0);
+    vec4 max_spec = vec4(0.0);
+    float min_luminance_spec = 1e38;
+    float max_luminance_spec = -1.0;
+    float min_variance_spec = 1e38;
+    float max_variance_spec = 0.0;
     for (int y = -radius; y <= radius; ++y)
     {
         for (int x = -radius; x <= radius; ++x)
@@ -39,6 +46,7 @@ void main()
                 continue;
             
             vec4 c = imageLoad(accumulated_diffuse, q);
+            vec4 spec = imageLoad(accumulated_specular, q);
 
             float l = rgb_to_luminance(c.rgb);
             if (l < min_luminance)
@@ -59,6 +67,26 @@ void main()
             {
                 max_variance = c.a;
             }
+
+            float l_spec = rgb_to_luminance(spec.rgb);
+            if (l_spec < min_luminance_spec)
+            {
+                min_luminance_spec = l_spec;
+                min_spec = spec;
+            }
+            if (l_spec > max_luminance_spec)
+            {
+                max_luminance_spec = l_spec;
+                max_spec = spec;
+            }
+            if (spec.a < min_variance_spec)
+            {
+                min_variance_spec = spec.a;
+            }
+            if (spec.a > max_variance_spec)
+            {
+                max_variance_spec = spec.a;
+            }
         }
     }
 
@@ -72,9 +100,18 @@ void main()
         out_color = max_color;
     }
 
+    float l_spec = rgb_to_luminance(out_specular.rgb);
+    if (l_spec < min_luminance_spec)
+    {
+        out_specular = min_spec;
+    }
+    else if (l_spec > max_luminance_spec)
+    {
+        out_specular = max_spec;
+    }
+
 #endif
 
-    vec4 out_specular = imageLoad(accumulated_specular, p);
 
     imageStore(filtered_diffuse, p, out_color);
     imageStore(filtered_specular, p, out_specular);

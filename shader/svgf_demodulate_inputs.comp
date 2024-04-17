@@ -47,17 +47,16 @@ void main()
     vec3 pos = imageLoad(in_world_position, p).xyz;
     if (!any(isnan(pos)))
     {
+#if DEMODULATION_USE_SPLIT_SUM_APPROXIMATION == 1
         vec3 V = normalize(curr_camera.origin.xyz - pos);
         vec3 N = unpack_gbuffer_normal(imageLoad(in_normal, p).rg);
-        float NoV = max(dot(N, V), 1e-4);
+        float NoV = dot(N, V);
         vec3 f0 = mix(vec3(0.04), albedo, metallic);
-        vec3 specular_reflectance = specularGGXReflectanceApprox(f0, roughness, NoV);
-        //vec3 specular_reflectance = environment_term_rtg(f0, NoV, roughness);
-        specular_reflectance = max(specular_reflectance, vec3(1e-4));
-
+        //vec3 specular_reflectance = specularGGXReflectanceApprox(f0, roughness, NoV);
+        vec3 specular_reflectance = environment_term_rtg(f0, NoV, roughness);
+        specular_reflectance = max(specular_reflectance, vec3(1e-4));   
         specular.rgb = remodulated_specular / specular_reflectance;
-        //specular.rgb = remodulated_specular;
-        //specular.rgb *= specular_reflectance;
+#endif
     }
 
     imageStore(out_diffuse, p, diffuse);
