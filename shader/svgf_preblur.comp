@@ -121,7 +121,7 @@ void main()
     w_sum = 1.0;
     float max_inv_hit_dist = specular.a;
 
-    vec3 camera_pos = camera.pairs[0].current.origin.xyz;
+    vec3 camera_pos = camera.pairs[p.z].current.origin.xyz;
     vec3 V = normalize(camera_pos - center_pos);
 #if PREPASS_ENABLED == 1
     for (int i = 0; i < 8; ++i)

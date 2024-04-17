@@ -192,8 +192,7 @@ void main()
         vec4 prev_specular = vec4(0.0);
         vec3 prev_moments = vec3(0.0);
 
-        // TODO: Fix indexing for camera pair in all places it is used
-        camera_pair cameras = camera.pairs[0];
+        camera_pair cameras = camera.pairs[p.z];
         camera_data curr_camera = cameras.current;
         camera_data prev_camera = cameras.previous;
         vec3 current_world_pos = imageLoad(in_world_pos, p).xyz;

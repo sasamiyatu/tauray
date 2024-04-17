@@ -41,7 +41,7 @@ void main()
     vec3 color = imageLoad(in_color, p).rgb;
     vec3 emissive = max(color - remodulated, vec3(0.0));
 
-    camera_pair cameras = camera.pairs[0];
+    camera_pair cameras = camera.pairs[p.z];
     camera_data curr_camera = cameras.current;
 
     vec3 pos = imageLoad(in_world_position, p).xyz;
